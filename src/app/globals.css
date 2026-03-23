@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f4eddc;
+  --foreground: #1e261c;
+  --surface: rgba(249, 243, 226, 0.72);
+  --surface-strong: rgba(247, 240, 221, 0.9);
+  --line: rgba(53, 68, 45, 0.16);
+  --accent: #5e7c47;
+  --accent-strong: #31482c;
+  --highlight: #d38b4d;
+  --muted: #5f6758;
+  --shadow: 0 26px 80px rgba(39, 53, 33, 0.12);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-display);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background:
+    radial-gradient(circle at top left, rgba(95, 124, 71, 0.18), transparent 28%),
+    radial-gradient(circle at 85% 8%, rgba(211, 139, 77, 0.16), transparent 24%),
+    linear-gradient(180deg, #f5efde 0%, #efe5d0 42%, #e7dbc1 100%);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body), sans-serif;
+  min-height: 100vh;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(94, 124, 71, 0.22);
+}
+
+.grain-overlay {
+  position: relative;
+}
+
+.grain-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 0.18;
+  pointer-events: none;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.85), transparent);
+}
+
+.section-shell {
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(255, 252, 244, 0.68), rgba(250, 244, 230, 0.86));
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.texture-ring {
+  position: absolute;
+  border-radius: 999px;
+  border: 1px solid rgba(49, 72, 44, 0.12);
+  pointer-events: none;
+}
+
+.serif-title {
+  font-family: var(--font-display), serif;
+  letter-spacing: -0.03em;
+}
+
+.canvas-grid {
+  background-image:
+    linear-gradient(rgba(49, 72, 44, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(49, 72, 44, 0.05) 1px, transparent 1px);
+  background-size: 28px 28px;
+}
