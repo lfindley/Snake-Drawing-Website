@@ -1,124 +1,208 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { CanvasControls } from "@/components/canvas-controls";
+import { photoShapeDataset } from "@/data/photo-shapes";
 import { DrawingCanvas } from "@/components/drawing-canvas";
 import { FadeMatchView } from "@/components/fade-match-view";
-import { ResultPanel } from "@/components/result-panel";
-import { featuredSnakeProfiles, snakeProfiles } from "@/data/snakes";
+import { featuredSnakeProfiles } from "@/data/snakes";
 import { matchSnake } from "@/lib/match-snake";
 import type { MatchResult, StrokePoint } from "@/lib/types";
 
-function wait(duration: number) {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, duration);
-  });
-}
+const MATCH_DELAY_MS = 850;
 
 export function SnakeMatchApp() {
   const [points, setPoints] = useState<StrokePoint[]>([]);
   const [matchedStroke, setMatchedStroke] = useState<StrokePoint[]>([]);
   const [result, setResult] = useState<MatchResult | null>(null);
-  const [isPending, startTransition] = useTransition();
+  const [isMatching, setIsMatching] = useState(false);
+  const matchTimerRef = useRef<number | null>(null);
 
   const canSubmit = points.length > 2;
+  const hasResult = result !== null;
+  const compactFacts = result?.snake.facts.slice(0, 2) ?? [];
+
+  const clearPendingMatch = () => {
+    if (matchTimerRef.current !== null) {
+      window.clearTimeout(matchTimerRef.current);
+      matchTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      clearPendingMatch();
+    };
+  }, []);
 
   const handleClear = () => {
+    clearPendingMatch();
+    setIsMatching(false);
     setPoints([]);
     setMatchedStroke([]);
     setResult(null);
   };
 
-  const handleSubmit = () => {
-    if (!canSubmit) {
+  const handleStrokeStart = () => {
+    if (!isMatching && !hasResult) {
       return;
     }
 
-    setMatchedStroke(points);
+    clearPendingMatch();
+    setIsMatching(false);
+    setMatchedStroke([]);
+    setResult(null);
+  };
 
-    startTransition(async () => {
-      await wait(850);
-      const nextResult = matchSnake(points);
+  const handleSubmit = () => {
+    if (!canSubmit || isMatching) {
+      return;
+    }
+
+    const submittedPoints = [...points];
+    clearPendingMatch();
+    setMatchedStroke(submittedPoints);
+    setResult(null);
+    setIsMatching(true);
+
+    matchTimerRef.current = window.setTimeout(() => {
+      const nextResult = matchSnake(submittedPoints);
       setResult(nextResult);
-    });
+      setIsMatching(false);
+      matchTimerRef.current = null;
+    }, MATCH_DELAY_MS);
   };
 
   return (
-    <section className="px-5 pb-8 sm:px-8 lg:px-10">
+    <section className="px-5 pb-8 pt-6 sm:px-8 lg:px-10">
       <div className="mx-auto max-w-[94rem]">
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.42fr)_minmax(22rem,0.58fr)]">
-          <div className="section-shell rounded-[2rem] p-5 sm:p-6 xl:p-7">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">
-                  Drawing workspace
+        <div className="section-shell relative overflow-hidden rounded-[2.2rem] p-6 sm:p-7 xl:p-8">
+          <div className="absolute inset-x-0 top-0 h-48 bg-[radial-gradient(circle_at_top,rgba(94,124,71,0.14),transparent_72%)]" />
+
+          <div className="relative flex flex-col gap-8">
+            <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+              <div className="max-w-4xl">
+                <p className="text-xs font-semibold uppercase tracking-[0.28em] text-[var(--accent)]">
+                  One-page snake sketch matcher
                 </p>
-                <h2 className="serif-title mt-2 text-3xl font-semibold text-[var(--accent-strong)] xl:text-4xl">
-                  Sketch a snake silhouette
-                </h2>
-                <p className="mt-2 max-w-3xl text-sm leading-7 text-[var(--muted)] xl:text-[1.02rem]">
-                  The matcher compares line length, ratio, curvature, turning rhythm,
-                  and waviness against {snakeProfiles.length} local species profiles.
+                <h1 className="serif-title mt-3 text-4xl font-semibold text-[var(--accent-strong)] sm:text-5xl xl:text-[4.6rem]">
+                  Draw a line and reveal the closest snake in the same frame.
+                </h1>
+                <p className="mt-4 max-w-3xl text-sm leading-7 text-[var(--muted)] sm:text-base xl:text-[1.05rem]">
+                  This client-side MVP compares a single drawn stroke against{" "}
+                  {photoShapeDataset.usableImages.toLocaleString()} usable silhouettes drawn
+                  from {photoShapeDataset.totalImages.toLocaleString()} local snake photos,
+                  then returns the closest photo and its linked species details.
                 </p>
               </div>
+
               <CanvasControls
                 canSubmit={canSubmit}
-                isMatching={isPending}
+                isMatching={isMatching}
                 onClear={handleClear}
                 onSubmit={handleSubmit}
               />
             </div>
 
-            <div className="mt-5">
-              <DrawingCanvas points={points} onChange={setPoints} />
-            </div>
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(19rem,0.55fr)]">
+              <div className="rounded-[1.8rem] border border-[var(--line)] bg-[#f8f1df]/92 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]">
+                <div className="relative overflow-hidden rounded-[1.55rem] border border-[rgba(49,72,44,0.14)] bg-[linear-gradient(135deg,rgba(240,231,210,0.96),rgba(246,240,225,0.86))]">
+                  <DrawingCanvas
+                    points={points}
+                    onChange={setPoints}
+                    onStrokeStart={handleStrokeStart}
+                    className={isMatching || hasResult ? "opacity-0" : "opacity-100"}
+                  />
+                  <FadeMatchView
+                    points={matchedStroke}
+                    result={result}
+                    isMatching={isMatching}
+                  />
+                </div>
+              </div>
 
-            <div className="mt-5 grid gap-3 xl:grid-cols-3">
-              <div className="rounded-[1.25rem] border border-[var(--line)] bg-white/66 px-4 py-4 text-sm leading-6 text-[var(--muted)]">
-                Longer, ribbon-like strokes tend to rank garter, ribbon, and green snakes higher.
-              </div>
-              <div className="rounded-[1.25rem] border border-[var(--line)] bg-white/66 px-4 py-4 text-sm leading-6 text-[var(--muted)]">
-                Compact, thicker turns usually push the score toward vipers, hognose snakes, and rattlesnakes.
-              </div>
-              <div className="rounded-[1.25rem] border border-[var(--line)] bg-white/66 px-4 py-4 text-sm leading-6 text-[var(--muted)]">
-                Broad, smooth curves favor kingsnakes, corn snakes, rat snakes, and gopher snakes.
+              <div className="flex flex-col gap-4">
+                <div className="rounded-[1.5rem] border border-[var(--line)] bg-white/64 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">
+                    How it works
+                  </p>
+                  <ol className="mt-3 space-y-3 text-sm leading-6 text-[var(--muted)]">
+                    <li>1. Draw one uninterrupted line in the canvas.</li>
+                    <li>2. Press match to lock that stroke and run the heuristic comparison.</li>
+                    <li>3. Watch the same area fade into the best local snake photo.</li>
+                  </ol>
+                </div>
+
+                <div className="rounded-[1.5rem] border border-[var(--line)] bg-white/68 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">
+                    Match summary
+                  </p>
+                  {result ? (
+                    <div className="mt-3">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="serif-title text-2xl font-semibold text-[var(--accent-strong)]">
+                            {result.snake.commonName}
+                          </p>
+                          <p className="mt-1 text-sm italic text-[var(--muted)]">
+                            {result.snake.scientificName}
+                          </p>
+                        </div>
+                        <div className="rounded-[1rem] border border-[var(--line)] bg-white/78 px-3 py-2 text-right">
+                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--muted)]">
+                            Similarity
+                          </p>
+                          <p className="mt-1 text-2xl font-extrabold text-[var(--accent-strong)]">
+                            {result.score}%
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-[var(--line)] bg-white/76 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+                          {result.score < 58 ? "Approximate match" : `${result.confidenceLabel} confidence`}
+                        </span>
+                        <span className="rounded-full border border-[var(--line)] bg-white/76 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">
+                          {result.snake.venomous === true
+                            ? "Venomous"
+                            : result.snake.venomous === false
+                              ? "Non-venomous"
+                              : "Venom status unknown"}
+                        </span>
+                      </div>
+
+                      <div className="mt-4 space-y-2 text-sm leading-6 text-[var(--foreground)]">
+                        {compactFacts.map((fact) => (
+                          <p key={fact}>{fact}</p>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm leading-6 text-[var(--muted)]">
+                      Your latest match appears here with a compact confidence summary and a few quick facts.
+                    </p>
+                  )}
+                </div>
+
+                <div className="rounded-[1.5rem] border border-[var(--line)] bg-white/60 p-5">
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">
+                    Featured species
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {featuredSnakeProfiles.map((snake) => (
+                      <span
+                        key={snake.id}
+                        className="rounded-full border border-[var(--line)] bg-white/74 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--muted)]"
+                      >
+                        {snake.commonName}
+                      </span>
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-
-          <div className="section-shell rounded-[2rem] p-5 sm:p-6 xl:p-7">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">
-              Side rail
-            </p>
-            <h2 className="serif-title mt-2 text-3xl font-semibold text-[var(--accent-strong)] xl:text-4xl">
-              Featured species for the MVP
-            </h2>
-            <p className="mt-2 text-sm leading-7 text-[var(--muted)]">
-              The full image corpus is loaded locally. These featured snakes have the most
-              complete educational notes and hand-tuned shape profiles.
-            </p>
-            <div className="mt-5 flex flex-wrap gap-2">
-              {featuredSnakeProfiles.map((snake) => (
-                <span
-                  key={snake.id}
-                  className="rounded-full border border-[var(--line)] bg-white/72 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)]"
-                >
-                  {snake.commonName}
-                </span>
-              ))}
-            </div>
-            <div className="mt-6 rounded-[1.35rem] border border-[var(--line)] bg-white/68 p-4 text-sm leading-7 text-[var(--muted)]">
-              Low scores are shown as approximate matches. The heuristic engine is calibrated for
-              desktop drawing space first, where longer strokes and smoother arm movement produce
-              better signals.
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,0.84fr)_minmax(0,1.16fr)]">
-          <FadeMatchView points={matchedStroke} result={result} />
-          <ResultPanel result={result} />
         </div>
       </div>
     </section>

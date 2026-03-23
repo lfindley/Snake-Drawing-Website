@@ -43,8 +43,8 @@ export function ResultPanel({ result }: ResultPanelProps) {
       <div className="grid gap-6 xl:grid-cols-[minmax(19rem,23rem)_minmax(0,1fr)]">
         <div className="relative min-h-[22rem] overflow-hidden rounded-[1.5rem] border border-[rgba(49,72,44,0.14)] xl:min-h-[28rem]">
           <Image
-            src={result.snake.image}
-            alt={result.snake.commonName}
+            src={result.photo.imagePath}
+            alt={`${result.snake.commonName} reference photo`}
             fill
             className="object-cover"
             sizes="(max-width: 1280px) 100vw, 30rem"

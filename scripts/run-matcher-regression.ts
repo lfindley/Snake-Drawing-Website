@@ -6,21 +6,22 @@ let failed = false;
 for (const fixture of matcherFixtures) {
   const ranked = rankSnakeMatches(fixture.points, 3);
   const rankedIds = ranked.map((entry) => entry.snake.id);
-  const missing = fixture.expectedTop3.filter((id) => !rankedIds.includes(id));
+  const topPhotoId = ranked[0]?.photo.id;
+  const missing = fixture.expectedTop3Species.filter((id) => !rankedIds.includes(id));
 
-  if (missing.length > 0) {
+  if (topPhotoId !== fixture.expectedTopPhotoId || missing.length > 0) {
     failed = true;
     console.error(
-      `[matcher] ${fixture.id} failed. Expected top3 to include: ${fixture.expectedTop3.join(
+      `[matcher] ${fixture.id} failed. Expected top photo: ${fixture.expectedTopPhotoId}; expected top3 species to include: ${fixture.expectedTop3Species.join(
         ", ",
-      )}. Received: ${rankedIds.join(", ")}`,
+      )}. Received photo: ${topPhotoId ?? "none"}; received species: ${rankedIds.join(", ")}`,
     );
     continue;
   }
 
   console.log(
     `[matcher] ${fixture.id} passed -> ${ranked
-      .map((entry) => `${entry.snake.commonName} (${entry.score}%)`)
+      .map((entry) => `${entry.snake.commonName} via ${entry.photo.fileName} (${entry.score}%)`)
       .join(", ")}`,
   );
 }

@@ -4,7 +4,8 @@ export type MatcherFixture = {
   id: string;
   description: string;
   points: StrokePoint[];
-  expectedTop3: string[];
+  expectedTopPhotoId: string;
+  expectedTop3Species: string[];
 };
 
 function buildStroke(points: Array<[number, number]>): StrokePoint[] {
@@ -18,11 +19,12 @@ function buildStroke(points: Array<[number, number]>): StrokePoint[] {
 export const matcherFixtures: MatcherFixture[] = [
   {
     id: "long-narrow-wave",
-    description: "Long narrow wave should favor slender terrestrial snakes.",
-    expectedTop3: [
-      "thamnophis-sirtalis",
-      "thamnophis-elegans",
-      "opheodrys-aestivus",
+    description: "Image-backed baseline for a long narrow wave stroke.",
+    expectedTopPhotoId: "masticophis-flagellum/97566ca025.jpg",
+    expectedTop3Species: [
+      "masticophis-flagellum",
+      "crotalus-viridis",
+      "pantherophis-alleghaniensis",
     ],
     points: buildStroke([
       [22, 174],
@@ -42,11 +44,12 @@ export const matcherFixtures: MatcherFixture[] = [
   },
   {
     id: "compact-heavy-coils",
-    description: "Compact heavy coils should favor vipers and hognose-like profiles.",
-    expectedTop3: [
-      "agkistrodon-contortrix",
-      "crotalus-atrox",
-      "heterodon-platirhinos",
+    description: "Image-backed baseline for a compact coiled stroke.",
+    expectedTopPhotoId: "crotalus-viridis/a7b337a07b.jpg",
+    expectedTop3Species: [
+      "crotalus-viridis",
+      "crotalus-scutulatus",
+      "pituophis-catenifer",
     ],
     points: buildStroke([
       [280, 160],
@@ -68,11 +71,12 @@ export const matcherFixtures: MatcherFixture[] = [
   },
   {
     id: "broad-smooth-constrictor",
-    description: "Broad smooth constrictor line should favor corn, kingsnake, and gopher snake profiles.",
-    expectedTop3: [
-      "pantherophis-guttatus",
-      "lampropeltis-californiae",
-      "pituophis-catenifer",
+    description: "Image-backed baseline for a broad smooth curve.",
+    expectedTopPhotoId: "masticophis-flagellum/0ec060ea74.jpg",
+    expectedTop3Species: [
+      "masticophis-flagellum",
+      "pantherophis-alleghaniensis",
+      "opheodrys-aestivus",
     ],
     points: buildStroke([
       [54, 202],

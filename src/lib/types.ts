@@ -14,12 +14,39 @@ export type StrokeFeatures = {
 
 export type SnakeShapeProfile = StrokeFeatures;
 
+export type SilhouetteFeatures = {
+  aspectRatio: number;
+  fillRatio: number;
+  compactness: number;
+  huMoments: number[];
+};
+
 export type FeatureBreakdown = {
-  key: keyof StrokeFeatures;
+  key: string;
   label: string;
   strokeValue: number;
-  snakeValue: number;
+  candidateValue: number;
   similarity: number;
+};
+
+export type PhotoShapeRecord = {
+  id: string;
+  snakeId: string;
+  fileName: string;
+  imagePath: string;
+  width: number;
+  height: number;
+  usable: boolean;
+  qualityScore: number;
+  extractionNotes: string[];
+  features: SilhouetteFeatures;
+};
+
+export type PhotoShapeDataset = {
+  generatedAt: string;
+  totalImages: number;
+  usableImages: number;
+  records: PhotoShapeRecord[];
 };
 
 export type SnakeProfile = {
@@ -37,6 +64,7 @@ export type SnakeProfile = {
 
 export type MatchResult = {
   snake: SnakeProfile;
+  photo: PhotoShapeRecord;
   score: number;
   confidenceLabel: "Low" | "Moderate" | "Strong";
   featureBreakdown: FeatureBreakdown[];

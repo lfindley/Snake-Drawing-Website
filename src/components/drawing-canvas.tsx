@@ -7,12 +7,19 @@ import type { StrokePoint } from "@/lib/types";
 type DrawingCanvasProps = {
   points: StrokePoint[];
   onChange: (points: StrokePoint[]) => void;
+  onStrokeStart?: () => void;
+  className?: string;
 };
 
 const CANVAS_WIDTH = 1280;
 const CANVAS_HEIGHT = 620;
 
-export function DrawingCanvas({ points, onChange }: DrawingCanvasProps) {
+export function DrawingCanvas({
+  points,
+  onChange,
+  onStrokeStart,
+  className,
+}: DrawingCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const activeStrokeRef = useRef<StrokePoint[]>(points);
   const drawingRef = useRef(false);
@@ -91,8 +98,9 @@ export function DrawingCanvas({ points, onChange }: DrawingCanvasProps) {
           ref={canvasRef}
           width={CANVAS_WIDTH}
           height={CANVAS_HEIGHT}
-          className="block h-[320px] w-full touch-none sm:h-[420px] lg:h-[520px] xl:h-[620px]"
+          className={`block h-[320px] w-full touch-none transition-opacity duration-500 sm:h-[420px] lg:h-[520px] xl:h-[620px] ${className ?? ""}`}
           onPointerDown={(event) => {
+            onStrokeStart?.();
             drawingRef.current = true;
             activeStrokeRef.current = [];
             appendPoint(event.clientX, event.clientY);
