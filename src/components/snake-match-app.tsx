@@ -12,14 +12,14 @@ import { matchSnake } from "@/lib/match-snake";
 import type { MatchResult, PhotoShapeRecord, StrokePoint } from "@/lib/types";
 
 const MATCH_DELAY_MS = 850;
-type OverlayViewMode = "line" | "silhouette" | "photo" | "both";
+type OverlayViewMode = "line" | "photo" | "both";
 
 export function SnakeMatchApp() {
   const [points, setPoints] = useState<StrokePoint[]>([]);
   const [matchedStroke, setMatchedStroke] = useState<StrokePoint[]>([]);
   const [result, setResult] = useState<MatchResult | null>(null);
   const [isMatching, setIsMatching] = useState(false);
-  const [viewMode, setViewMode] = useState<OverlayViewMode>("both");
+  const [viewMode, setViewMode] = useState<OverlayViewMode>("photo");
   const [photoRecords, setPhotoRecords] = useState<PhotoShapeRecord[]>([]);
   const [datasetReady, setDatasetReady] = useState(false);
   const matchTimerRef = useRef<number | null>(null);
@@ -63,7 +63,7 @@ export function SnakeMatchApp() {
     setPoints([]);
     setMatchedStroke([]);
     setResult(null);
-    setViewMode("both");
+    setViewMode("photo");
   };
 
   const handleStrokeStart = () => {
@@ -75,7 +75,7 @@ export function SnakeMatchApp() {
     setIsMatching(false);
     setMatchedStroke([]);
     setResult(null);
-    setViewMode("both");
+    setViewMode("photo");
   };
 
   const handleSubmit = () => {
@@ -92,7 +92,7 @@ export function SnakeMatchApp() {
     matchTimerRef.current = window.setTimeout(() => {
       const nextResult = matchSnake(submittedPoints, photoRecords);
       setResult(nextResult);
-      setViewMode("both");
+      setViewMode("photo");
       setIsMatching(false);
       matchTimerRef.current = null;
     }, MATCH_DELAY_MS);
@@ -131,7 +131,7 @@ export function SnakeMatchApp() {
 
             {result ? (
               <div className="flex flex-wrap gap-2">
-                {(["line", "silhouette", "photo", "both"] as OverlayViewMode[]).map((mode) => (
+                {(["line", "photo", "both"] as OverlayViewMode[]).map((mode) => (
                   <button
                     key={mode}
                     type="button"
@@ -179,7 +179,7 @@ export function SnakeMatchApp() {
                   <ol className="mt-3 space-y-3 text-sm leading-6 text-[var(--muted)]">
                     <li>1. Draw one uninterrupted line in the canvas.</li>
                     <li>2. Press match to compare it against extracted photo-line paths first.</li>
-                    <li>3. Use the canvas toggle to compare your line, the matched silhouette, and the photo cutout.</li>
+                    <li>3. Use the canvas toggle to compare your line with the matched full photo.</li>
                   </ol>
                 </div>
 

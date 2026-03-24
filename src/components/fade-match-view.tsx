@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { boundingBox, clamp } from "@/lib/geometry";
 import type { MatchResult, StrokePoint } from "@/lib/types";
 
-type OverlayViewMode = "line" | "silhouette" | "photo" | "both";
+type OverlayViewMode = "line" | "photo" | "both";
 
 type FadeMatchViewProps = {
   points: StrokePoint[];
@@ -15,10 +15,6 @@ type FadeMatchViewProps = {
   canvasHeight: number;
   viewMode: OverlayViewMode;
 };
-
-function polygonPoints(points: Array<{ x: number; y: number }>) {
-  return points.map((point) => `${point.x * 100},${point.y * 100}`).join(" ");
-}
 
 function overlayBounds(points: StrokePoint[], canvasWidth: number, canvasHeight: number) {
   if (points.length < 2) {
@@ -58,18 +54,11 @@ export function FadeMatchView({
           ? `${result.confidenceLabel} confidence`
           : null;
 
-  const showSilhouette =
-    result !== null &&
-    bounds !== null &&
-    result.overlay.silhouetteAvailable &&
-    (viewMode === "silhouette" || viewMode === "both");
   const showPhoto =
     result !== null &&
     bounds !== null &&
     result.overlay.photoAvailable &&
     (viewMode === "photo" || viewMode === "both");
-
-  const silhouettePoints = result ? polygonPoints(result.photo.silhouettePolygon) : "";
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden rounded-[1.55rem]">
@@ -105,35 +94,13 @@ export function FadeMatchView({
             className="pointer-events-none absolute"
             style={bounds}
           >
-            <svg viewBox="0 0 100 100" className="h-full w-full overflow-visible">
-              <defs>
-                <clipPath id={`photo-shape-${result.photo.id.replace(/[^\w-]/g, "-")}`}>
-                  <polygon points={silhouettePoints} />
-                </clipPath>
-              </defs>
-
-              {showPhoto ? (
-                <image
-                  href={result.photo.imagePath}
-                  x="0"
-                  y="0"
-                  width="100"
-                  height="100"
-                  preserveAspectRatio="none"
-                  clipPath={`url(#photo-shape-${result.photo.id.replace(/[^\w-]/g, "-")})`}
-                  opacity={viewMode === "photo" ? "0.94" : "0.72"}
-                />
-              ) : null}
-
-              {showSilhouette ? (
-                <polygon
-                  points={silhouettePoints}
-                  fill="rgba(94, 124, 71, 0.22)"
-                  stroke="rgba(49, 72, 44, 0.78)"
-                  strokeWidth="1.4"
-                />
-              ) : null}
-            </svg>
+            {showPhoto ? (
+              <img
+                src={result.photo.imagePath}
+                alt={result.snake.commonName}
+                className="h-full w-full rounded-[1.2rem] object-cover shadow-[0_18px_40px_rgba(20,31,17,0.18)]"
+              />
+            ) : null}
           </motion.div>
         ) : null}
       </AnimatePresence>

@@ -28,6 +28,7 @@ export function DrawingCanvas({
   const interactionRef = useRef<HTMLDivElement | null>(null);
   const activeStrokeRef = useRef<StrokePoint[]>(points);
   const drawingRef = useRef(false);
+  const pointerIdRef = useRef<number | null>(null);
 
   const beginStroke = (clientX: number, clientY: number) => {
     onStrokeStart?.();
@@ -38,12 +39,8 @@ export function DrawingCanvas({
 
   const endStroke = () => {
     drawingRef.current = false;
+    pointerIdRef.current = null;
   };
-
-  const touchPoint = (touch: Touch) => ({
-    x: touch.clientX,
-    y: touch.clientY,
-  });
 
   useEffect(() => {
     activeStrokeRef.current = points;
@@ -113,50 +110,6 @@ export function DrawingCanvas({
     onChange(nextPoints);
   };
 
-  useEffect(() => {
-    const handleMouseMove = (event: MouseEvent) => {
-      if (!drawingRef.current) {
-        return;
-      }
-      event.preventDefault();
-      appendPoint(event.clientX, event.clientY);
-    };
-
-    const handleMouseUp = () => {
-      endStroke();
-    };
-
-    const handleTouchMove = (event: TouchEvent) => {
-      if (!drawingRef.current) {
-        return;
-      }
-      const touch = event.touches[0];
-      if (!touch) {
-        return;
-      }
-      event.preventDefault();
-      appendPoint(touch.clientX, touch.clientY);
-    };
-
-    const handleTouchEnd = () => {
-      endStroke();
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    window.addEventListener("touchmove", handleTouchMove, { passive: false });
-    window.addEventListener("touchend", handleTouchEnd);
-    window.addEventListener("touchcancel", handleTouchEnd);
-
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-      window.removeEventListener("touchmove", handleTouchMove);
-      window.removeEventListener("touchend", handleTouchEnd);
-      window.removeEventListener("touchcancel", handleTouchEnd);
-    };
-  }, []);
-
   return (
     <div className="relative overflow-hidden rounded-[1.8rem] border border-[var(--line)] bg-[#f8f1df] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]">
       <div className="canvas-grid relative overflow-hidden rounded-[1.35rem] border border-[rgba(49,72,44,0.14)] bg-[linear-gradient(180deg,rgba(255,255,255,0.4),rgba(244,234,212,0.3))]">
@@ -166,22 +119,37 @@ export function DrawingCanvas({
           height={CANVAS_HEIGHT}
           className={`relative z-10 block h-[320px] w-full select-none transition-opacity duration-500 sm:h-[420px] lg:h-[520px] xl:h-[620px] ${className ?? ""}`}
         />
-        {overlay ? <div className="absolute inset-0 z-20">{overlay}</div> : null}
+        {overlay ? <div className="pointer-events-none absolute inset-0 z-20">{overlay}</div> : null}
         <div
           ref={interactionRef}
-          className="absolute inset-0 z-30 cursor-crosshair touch-none"
-          onMouseDown={(event) => {
+          className="pointer-events-auto absolute inset-0 z-30 cursor-crosshair touch-none"
+          onPointerDown={(event) => {
             event.preventDefault();
+            pointerIdRef.current = event.pointerId;
+            interactionRef.current?.setPointerCapture(event.pointerId);
             beginStroke(event.clientX, event.clientY);
           }}
-          onTouchStart={(event) => {
-            const touch = event.touches[0];
-            if (!touch) {
+          onPointerMove={(event) => {
+            if (!drawingRef.current || pointerIdRef.current !== event.pointerId) {
               return;
             }
             event.preventDefault();
-            const point = touchPoint(touch);
-            beginStroke(point.x, point.y);
+            appendPoint(event.clientX, event.clientY);
+          }}
+          onPointerUp={(event) => {
+            if (pointerIdRef.current === event.pointerId) {
+              interactionRef.current?.releasePointerCapture(event.pointerId);
+            }
+            endStroke();
+          }}
+          onPointerCancel={(event) => {
+            if (pointerIdRef.current === event.pointerId) {
+              interactionRef.current?.releasePointerCapture(event.pointerId);
+            }
+            endStroke();
+          }}
+          onLostPointerCapture={() => {
+            endStroke();
           }}
         />
 
