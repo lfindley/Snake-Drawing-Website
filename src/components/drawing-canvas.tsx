@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import type { ReactNode } from "react";
 
 import type { StrokePoint } from "@/lib/types";
 
@@ -9,6 +10,7 @@ type DrawingCanvasProps = {
   onChange: (points: StrokePoint[]) => void;
   onStrokeStart?: () => void;
   className?: string;
+  overlay?: ReactNode;
 };
 
 const CANVAS_WIDTH = 1280;
@@ -20,6 +22,7 @@ export function DrawingCanvas({
   onChange,
   onStrokeStart,
   className,
+  overlay,
 }: DrawingCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const interactionRef = useRef<HTMLDivElement | null>(null);
@@ -163,6 +166,7 @@ export function DrawingCanvas({
           height={CANVAS_HEIGHT}
           className={`relative z-10 block h-[320px] w-full select-none transition-opacity duration-500 sm:h-[420px] lg:h-[520px] xl:h-[620px] ${className ?? ""}`}
         />
+        {overlay ? <div className="absolute inset-0 z-20">{overlay}</div> : null}
         <div
           ref={interactionRef}
           className="absolute inset-0 z-30 cursor-crosshair touch-none"

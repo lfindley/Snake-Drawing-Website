@@ -155,17 +155,19 @@ export function SnakeMatchApp() {
                     points={points}
                     onChange={setPoints}
                     onStrokeStart={handleStrokeStart}
+                    overlay={
+                      isMatching || result ? (
+                        <FadeMatchView
+                          points={matchedStroke}
+                          result={result}
+                          isMatching={isMatching}
+                          canvasWidth={CANVAS_WIDTH}
+                          canvasHeight={CANVAS_HEIGHT}
+                          viewMode={viewMode}
+                        />
+                      ) : null
+                    }
                   />
-                  {isMatching || result ? (
-                    <FadeMatchView
-                      points={matchedStroke}
-                    result={result}
-                    isMatching={isMatching}
-                    canvasWidth={CANVAS_WIDTH}
-                    canvasHeight={CANVAS_HEIGHT}
-                    viewMode={viewMode}
-                  />
-                ) : null}
                 </div>
               </div>
 
