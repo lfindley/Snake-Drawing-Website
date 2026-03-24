@@ -4,6 +4,11 @@ export type StrokePoint = {
   t: number;
 };
 
+export type NormalizedPathPoint = {
+  x: number;
+  y: number;
+};
+
 export type StrokeFeatures = {
   pathLength: number;
   aspectRatio: number;
@@ -20,6 +25,8 @@ export type SilhouetteFeatures = {
   compactness: number;
   huMoments: number[];
 };
+
+export type PhotoLineFeatures = StrokeFeatures;
 
 export type FeatureBreakdown = {
   key: string;
@@ -40,6 +47,11 @@ export type PhotoShapeRecord = {
   qualityScore: number;
   extractionNotes: string[];
   features: SilhouetteFeatures;
+  silhouettePolygon: NormalizedPathPoint[];
+  linePoints: NormalizedPathPoint[];
+  lineFeatures: PhotoLineFeatures;
+  lineQualityScore: number;
+  lineUsable: boolean;
 };
 
 export type PhotoShapeDataset = {
@@ -68,4 +80,9 @@ export type MatchResult = {
   score: number;
   confidenceLabel: "Low" | "Moderate" | "Strong";
   featureBreakdown: FeatureBreakdown[];
+  overlay: {
+    silhouetteAvailable: boolean;
+    photoAvailable: boolean;
+    lineAvailable: boolean;
+  };
 };

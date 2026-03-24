@@ -14,10 +14,13 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 RAW_ROOT = PROJECT_ROOT / "Snake images"
-OUTPUT_PATH = PROJECT_ROOT / "src" / "data" / "photo-shape-dataset.generated.json"
+OUTPUT_PATH = PROJECT_ROOT / "public" / "data" / "photo-shape-dataset.generated.json"
+MANIFEST_PATH = PROJECT_ROOT / "src" / "data" / "photo-shape-manifest.generated.json"
 MAX_DIMENSION = 256
 MIN_AREA_RATIO = 0.01
 WORKER_COUNT = max((os.cpu_count() or 4) - 1, 1)
+TARGET_LINE_POINTS = 72
+TARGET_POLYGON_POINTS = 96
 
 
 @dataclass
@@ -28,6 +31,11 @@ class ExtractionResult:
     quality_score: float
     extraction_notes: list[str]
     features: dict[str, object]
+    silhouette_polygon: list[dict[str, float]]
+    line_points: list[dict[str, float]]
+    line_features: dict[str, float | list[float]]
+    line_quality_score: float
+    line_usable: bool
 
 
 def log_hu_moments(hu: np.ndarray) -> list[float]:
@@ -38,6 +46,222 @@ def log_hu_moments(hu: np.ndarray) -> list[float]:
         else:
             values.append(float(-math.copysign(1.0, value) * math.log10(abs(float(value)))))
     return values
+
+
+def point_dicts(points: list[tuple[float, float]]) -> list[dict[str, float]]:
+    return [{"x": round(float(x), 6), "y": round(float(y), 6)} for x, y in points]
+
+
+def resample_polyline(points: list[tuple[float, float]], target_count: int) -> list[tuple[float, float]]:
+    if not points:
+        return []
+    if len(points) == 1:
+        return [points[0]] * target_count
+
+    cumulative = [0.0]
+    for index in range(1, len(points)):
+        prev_x, prev_y = points[index - 1]
+        curr_x, curr_y = points[index]
+        cumulative.append(cumulative[-1] + math.hypot(curr_x - prev_x, curr_y - prev_y))
+
+    total = cumulative[-1]
+    if total == 0:
+        return [points[0]] * target_count
+
+    interval = total / max(target_count - 1, 1)
+    result = [points[0]]
+    target_distance = interval
+    segment_index = 1
+
+    while segment_index < len(points) and len(result) < target_count - 1:
+        prev_distance = cumulative[segment_index - 1]
+        curr_distance = cumulative[segment_index]
+        if curr_distance >= target_distance:
+            ratio = (target_distance - prev_distance) / max(curr_distance - prev_distance, 1e-9)
+            ax, ay = points[segment_index - 1]
+            bx, by = points[segment_index]
+            result.append((ax + (bx - ax) * ratio, ay + (by - ay) * ratio))
+            target_distance += interval
+        else:
+            segment_index += 1
+
+    result.append(points[-1])
+    while len(result) < target_count:
+        result.append(points[-1])
+    return result
+
+
+def normalize_polyline(points: list[tuple[float, float]], target_count: int = TARGET_LINE_POINTS) -> list[tuple[float, float]]:
+    resampled = resample_polyline(points, target_count)
+    if not resampled:
+        return []
+
+    xs = [x for x, _ in resampled]
+    ys = [y for _, y in resampled]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    center_x = min_x + (max_x - min_x) / 2
+    center_y = min_y + (max_y - min_y) / 2
+    translated = [(x - center_x, y - center_y) for x, y in resampled]
+
+    start_x, start_y = translated[0]
+    end_x, end_y = translated[-1]
+    angle = math.atan2(end_y - start_y, end_x - start_x)
+    cos_theta = math.cos(-angle)
+    sin_theta = math.sin(-angle)
+
+    aligned = [
+        (
+            x * cos_theta - y * sin_theta,
+            x * sin_theta + y * cos_theta,
+        )
+        for x, y in translated
+    ]
+
+    aligned_xs = [x for x, _ in aligned]
+    aligned_ys = [y for _, y in aligned]
+    scale = max(max(aligned_xs) - min(aligned_xs), max(aligned_ys) - min(aligned_ys), 1.0)
+    return [(x / scale, y / scale) for x, y in aligned]
+
+
+def standard_deviation(values: list[float]) -> float:
+    if len(values) < 2:
+        return 0.0
+    avg = sum(values) / len(values)
+    variance = sum((value - avg) ** 2 for value in values) / len(values)
+    return math.sqrt(variance)
+
+
+def extract_line_features(points: list[tuple[float, float]]) -> dict[str, float]:
+    if len(points) < 3:
+        return {
+            "pathLength": 0.0,
+            "aspectRatio": 1.0,
+            "curvature": 0.0,
+            "turnVariance": 0.0,
+            "waviness": 0.0,
+        }
+
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    width = max(xs) - min(xs)
+    height = max(ys) - min(ys)
+    path_length = 0.0
+    turning_angles: list[float] = []
+    y_deltas: list[float] = []
+
+    for index in range(1, len(points)):
+        ax, ay = points[index - 1]
+        bx, by = points[index]
+        path_length += math.hypot(bx - ax, by - ay)
+
+    for index in range(1, len(points) - 1):
+        px, py = points[index - 1]
+        cx, cy = points[index]
+        nx, ny = points[index + 1]
+        angle_a = math.atan2(cy - py, cx - px)
+        angle_b = math.atan2(ny - cy, nx - cx)
+        delta = math.atan2(math.sin(angle_b - angle_a), math.cos(angle_b - angle_a))
+        turning_angles.append(abs(delta))
+        y_deltas.append(ny - cy)
+
+    sign_changes = 0
+    previous_sign = 0
+    for value in y_deltas:
+        sign = 1 if value > 0 else -1 if value < 0 else 0
+        if sign != 0 and previous_sign != 0 and sign != previous_sign:
+            sign_changes += 1
+        if sign != 0:
+            previous_sign = sign
+
+    curvature = sum(turning_angles) / (math.pi * max(len(turning_angles), 1))
+    return {
+        "pathLength": round(min(path_length, 4.0), 6),
+        "aspectRatio": round(min(max(width / max(height, 1e-4), 0.5), 8.0), 6),
+        "curvature": round(min(max(curvature, 0.0), 1.0), 6),
+        "turnVariance": round(min(max(standard_deviation(turning_angles) / math.pi, 0.0), 1.0), 6),
+        "waviness": round(min(max(sign_changes / max(len(y_deltas), 1), 0.0), 1.0), 6),
+    }
+
+
+def normalize_polygon(contour: np.ndarray, target_count: int = TARGET_POLYGON_POINTS) -> list[tuple[float, float]]:
+    points = [(float(point[0][0]), float(point[0][1])) for point in contour]
+    if not points:
+        return []
+
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    width = max(max_x - min_x, 1.0)
+    height = max(max_y - min_y, 1.0)
+
+    normalized = [((x - min_x) / width, (y - min_y) / height) for x, y in points]
+    return resample_polyline(normalized + [normalized[0]], target_count)
+
+
+def extract_centerline_points(component_mask: np.ndarray) -> tuple[list[tuple[float, float]], float, list[str]]:
+    coords = np.column_stack(np.where(component_mask > 0))
+    if len(coords) < 24:
+        return [], 0.0, ["line-too-small"]
+
+    coords_xy = np.column_stack((coords[:, 1], coords[:, 0])).astype(np.float32)
+    mean = coords_xy.mean(axis=0)
+    centered = coords_xy - mean
+    covariance = np.cov(centered.T)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    principal = eigenvectors[:, int(np.argmax(eigenvalues))]
+    angle = math.atan2(float(principal[1]), float(principal[0]))
+
+    cos_theta = math.cos(-angle)
+    sin_theta = math.sin(-angle)
+    rotated = np.empty_like(coords_xy)
+    rotated[:, 0] = centered[:, 0] * cos_theta - centered[:, 1] * sin_theta
+    rotated[:, 1] = centered[:, 0] * sin_theta + centered[:, 1] * cos_theta
+
+    bins: dict[int, list[float]] = {}
+    for x_value, y_value in rotated:
+        bins.setdefault(int(round(float(x_value))), []).append(float(y_value))
+
+    ordered_x = sorted(bins.keys())
+    if len(ordered_x) < 18:
+        return [], 0.0, ["line-too-short"]
+
+    raw_points = []
+    for x_value in ordered_x:
+        y_values = bins[x_value]
+        raw_points.append((float(x_value), (min(y_values) + max(y_values)) / 2))
+
+    smoothed_points = []
+    window = 4
+    for index, (x_value, _) in enumerate(raw_points):
+        slice_start = max(index - window, 0)
+        slice_end = min(index + window + 1, len(raw_points))
+        sample = raw_points[slice_start:slice_end]
+        smoothed_points.append((x_value, sum(y for _, y in sample) / len(sample)))
+
+    cos_back = math.cos(angle)
+    sin_back = math.sin(angle)
+    restored = []
+    for x_value, y_value in smoothed_points:
+        rotated_x = x_value * cos_back - y_value * sin_back + float(mean[0])
+        rotated_y = x_value * sin_back + y_value * cos_back + float(mean[1])
+        restored.append((rotated_x, rotated_y))
+
+    normalized_line = normalize_polyline(restored, TARGET_LINE_POINTS)
+    coverage = len(ordered_x) / max(max(ordered_x) - min(ordered_x) + 1, 1)
+    span_x = max(point[0] for point in normalized_line) - min(point[0] for point in normalized_line)
+    span_y = max(point[1] for point in normalized_line) - min(point[1] for point in normalized_line)
+    elongation = span_x / max(span_y, 1e-4)
+    quality = min(max(coverage * 0.7 + min(elongation / 4.0, 1.0) * 0.3, 0.0), 1.0)
+
+    notes: list[str] = []
+    if coverage < 0.32:
+        notes.append("line-sparse")
+    if elongation < 1.1:
+        notes.append("line-weak-elongation")
+
+    return normalized_line, round(float(quality), 6), notes
 
 
 def resize_for_processing(image: np.ndarray) -> np.ndarray:
@@ -211,6 +435,11 @@ def extract_record(image_path_str: str) -> dict[str, object]:
                 "compactness": 0.0,
                 "huMoments": [0.0] * 7,
             },
+            silhouette_polygon=[],
+            line_points=[],
+            line_features=extract_line_features([]),
+            line_quality_score=0.0,
+            line_usable=False,
         )
         return {
             "id": f"{image_path.parent.name}/{image_path.name}",
@@ -223,6 +452,11 @@ def extract_record(image_path_str: str) -> dict[str, object]:
             "qualityScore": result.quality_score,
             "extractionNotes": result.extraction_notes,
             "features": result.features,
+            "silhouettePolygon": result.silhouette_polygon,
+            "linePoints": result.line_points,
+            "lineFeatures": result.line_features,
+            "lineQualityScore": result.line_quality_score,
+            "lineUsable": result.line_usable,
         }
 
     height, width = image.shape[:2]
@@ -241,6 +475,11 @@ def extract_record(image_path_str: str) -> dict[str, object]:
                 "compactness": 0.0,
                 "huMoments": [0.0] * 7,
             },
+            silhouette_polygon=[],
+            line_points=[],
+            line_features=extract_line_features([]),
+            line_quality_score=0.0,
+            line_usable=False,
         )
         return {
             "id": f"{image_path.parent.name}/{image_path.name}",
@@ -253,6 +492,11 @@ def extract_record(image_path_str: str) -> dict[str, object]:
             "qualityScore": result.quality_score,
             "extractionNotes": result.extraction_notes,
             "features": result.features,
+            "silhouettePolygon": result.silhouette_polygon,
+            "linePoints": result.line_points,
+            "lineFeatures": result.line_features,
+            "lineQualityScore": result.line_quality_score,
+            "lineUsable": result.line_usable,
         }
 
     contours, _ = cv2.findContours(component_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -260,6 +504,8 @@ def extract_record(image_path_str: str) -> dict[str, object]:
     quality_score, contour_notes = score_contour(contour, component_mask.shape)
     all_notes = list(dict.fromkeys(notes + contour_notes))
     features = extract_features(component_mask)
+    line_points, line_quality_score, line_notes = extract_centerline_points(component_mask)
+    all_notes = list(dict.fromkeys(all_notes + line_notes))
     usable = (
         quality_score >= 0.55
         and "tiny-component" not in all_notes
@@ -268,6 +514,7 @@ def extract_record(image_path_str: str) -> dict[str, object]:
         and features["fillRatio"] < 0.82
         and features["compactness"] < 0.42
     )
+    line_usable = usable and line_quality_score >= 0.42 and len(line_points) >= 24
 
     result = ExtractionResult(
         width=width,
@@ -276,6 +523,11 @@ def extract_record(image_path_str: str) -> dict[str, object]:
         quality_score=round(quality_score, 6),
         extraction_notes=all_notes,
         features=features,
+        silhouette_polygon=point_dicts(normalize_polygon(contour)),
+        line_points=point_dicts(line_points),
+        line_features=extract_line_features(line_points),
+        line_quality_score=line_quality_score,
+        line_usable=line_usable,
     )
     return {
         "id": f"{image_path.parent.name}/{image_path.name}",
@@ -288,6 +540,11 @@ def extract_record(image_path_str: str) -> dict[str, object]:
         "qualityScore": result.quality_score,
         "extractionNotes": result.extraction_notes,
         "features": result.features,
+        "silhouettePolygon": result.silhouette_polygon,
+        "linePoints": result.line_points,
+        "lineFeatures": result.line_features,
+        "lineQualityScore": result.line_quality_score,
+        "lineUsable": result.line_usable,
     }
 
 
@@ -308,7 +565,20 @@ def main() -> None:
         "records": records,
     }
 
+    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MANIFEST_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(json.dumps(dataset, separators=(",", ":")), encoding="utf-8")
+    MANIFEST_PATH.write_text(
+        json.dumps(
+            {
+                "generatedAt": dataset["generatedAt"],
+                "totalImages": dataset["totalImages"],
+                "usableImages": dataset["usableImages"],
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
     print(
         f"[photo-shapes] wrote {len(records)} records to {OUTPUT_PATH} "
         f"({dataset['usableImages']} usable)"

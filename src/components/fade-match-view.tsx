@@ -1,112 +1,162 @@
 "use client";
 
-import Image from "next/image";
 import { AnimatePresence, motion } from "motion/react";
 
-import { normalizeStroke } from "@/lib/normalize-stroke";
+import { boundingBox, clamp } from "@/lib/geometry";
 import type { MatchResult, StrokePoint } from "@/lib/types";
+
+type OverlayViewMode = "line" | "silhouette" | "photo" | "both";
 
 type FadeMatchViewProps = {
   points: StrokePoint[];
   result: MatchResult | null;
   isMatching: boolean;
+  canvasWidth: number;
+  canvasHeight: number;
+  viewMode: OverlayViewMode;
 };
 
-function buildPolyline(points: StrokePoint[]) {
-  const normalized = normalizeStroke(points);
-
-  if (normalized.length === 0) {
-    return "";
-  }
-
-  return normalized
-    .map((point) => `${(point.x + 0.5) * 100},${(point.y + 0.5) * 100}`)
-    .join(" ");
+function polygonPoints(points: Array<{ x: number; y: number }>) {
+  return points.map((point) => `${point.x * 100},${point.y * 100}`).join(" ");
 }
 
-export function FadeMatchView({ points, result, isMatching }: FadeMatchViewProps) {
-  const polyline = buildPolyline(points);
-  const hasStroke = polyline.length > 0;
+function overlayBounds(points: StrokePoint[], canvasWidth: number, canvasHeight: number) {
+  if (points.length < 2) {
+    return null;
+  }
+
+  const box = boundingBox(points);
+  const padding = 26;
+  const left = clamp(box.minX - padding, 0, canvasWidth);
+  const top = clamp(box.minY - padding, 0, canvasHeight);
+  const right = clamp(box.maxX + padding, 0, canvasWidth);
+  const bottom = clamp(box.maxY + padding, 0, canvasHeight);
+
+  return {
+    left: `${(left / canvasWidth) * 100}%`,
+    top: `${(top / canvasHeight) * 100}%`,
+    width: `${(Math.max(right - left, 48) / canvasWidth) * 100}%`,
+    height: `${(Math.max(bottom - top, 48) / canvasHeight) * 100}%`,
+  };
+}
+
+export function FadeMatchView({
+  points,
+  result,
+  isMatching,
+  canvasWidth,
+  canvasHeight,
+  viewMode,
+}: FadeMatchViewProps) {
+  const bounds = overlayBounds(points, canvasWidth, canvasHeight);
   const statusLabel =
     isMatching
       ? "Matching..."
       : result?.score !== undefined && result.score < 58
-      ? "Approximate match"
-      : result
-        ? `${result.confidenceLabel} confidence`
-        : null;
+        ? "Approximate match"
+        : result
+          ? `${result.confidenceLabel} confidence`
+          : null;
+
+  const showSilhouette =
+    result !== null &&
+    bounds !== null &&
+    result.overlay.silhouetteAvailable &&
+    (viewMode === "silhouette" || viewMode === "both");
+  const showPhoto =
+    result !== null &&
+    bounds !== null &&
+    result.overlay.photoAvailable &&
+    (viewMode === "photo" || viewMode === "both");
+
+  const silhouettePoints = result ? polygonPoints(result.photo.silhouettePolygon) : "";
 
   return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden rounded-[1.55rem]">
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(94,124,71,0.18),transparent_42%)]" />
+    <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden rounded-[1.55rem]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(94,124,71,0.18),transparent_42%)]" />
 
       {statusLabel ? (
-        <div className="absolute right-4 top-4 z-20 rounded-full border border-white/40 bg-[rgba(255,252,244,0.82)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)] shadow-[0_10px_25px_rgba(20,31,17,0.12)]">
+        <div className="pointer-events-none absolute right-4 top-4 z-20 rounded-full border border-white/40 bg-[rgba(255,252,244,0.82)] px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-[var(--muted)] shadow-[0_10px_25px_rgba(20,31,17,0.12)]">
           {statusLabel}
         </div>
       ) : null}
 
       <AnimatePresence>
-        {(isMatching || result) && hasStroke ? (
+        {bounds && isMatching ? (
           <motion.div
-            key={`stroke-${result?.snake.id ?? "matching"}`}
-            initial={{ opacity: 0.92, scale: 1 }}
-            animate={{ opacity: result ? 0 : 1, scale: result ? 0.975 : 1 }}
+            key="matching-box"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.65, ease: "easeInOut" }}
-            className="absolute inset-0 p-6 sm:p-8"
+            className="pointer-events-none absolute rounded-[1.4rem] border border-dashed border-[rgba(49,72,44,0.42)] bg-[rgba(255,252,244,0.16)]"
+            style={bounds}
+          />
+        ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {result && bounds ? (
+          <motion.div
+            key={result.photo.id}
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.6, ease: "easeOut" }}
+            className="pointer-events-none absolute"
+            style={bounds}
           >
-            <svg viewBox="0 0 100 100" className="h-full w-full">
-              <polyline
-                points={polyline}
-                fill="none"
-                stroke="#30452d"
-                strokeWidth="3.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
+            <svg viewBox="0 0 100 100" className="h-full w-full overflow-visible">
+              <defs>
+                <clipPath id={`photo-shape-${result.photo.id.replace(/[^\w-]/g, "-")}`}>
+                  <polygon points={silhouettePoints} />
+                </clipPath>
+              </defs>
+
+              {showPhoto ? (
+                <image
+                  href={result.photo.imagePath}
+                  x="0"
+                  y="0"
+                  width="100"
+                  height="100"
+                  preserveAspectRatio="none"
+                  clipPath={`url(#photo-shape-${result.photo.id.replace(/[^\w-]/g, "-")})`}
+                  opacity={viewMode === "photo" ? "0.94" : "0.72"}
+                />
+              ) : null}
+
+              {showSilhouette ? (
+                <polygon
+                  points={silhouettePoints}
+                  fill="rgba(94, 124, 71, 0.22)"
+                  stroke="rgba(49, 72, 44, 0.78)"
+                  strokeWidth="1.4"
+                />
+              ) : null}
             </svg>
           </motion.div>
         ) : null}
       </AnimatePresence>
 
-      <AnimatePresence mode="wait">
-        {result ? (
-          <motion.div
-            key={result.snake.id}
-            initial={{ opacity: 0, scale: 1.02 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.85, delay: 0.12, ease: "easeOut" }}
-            className="absolute inset-0"
-          >
-            <Image
-              src={result.photo.imagePath}
-              alt={`${result.snake.commonName} reference photo`}
-              fill
-              className="object-cover"
-              sizes="(max-width: 1024px) 100vw, 70vw"
-            />
-            <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-[rgba(19,26,17,0.9)] via-[rgba(19,26,17,0.36)] to-transparent px-5 pb-5 pt-20 text-stone-50 sm:px-6 sm:pb-6">
-              <p className="text-xs font-semibold uppercase tracking-[0.24em] text-stone-200/78">
-                Closest match
-              </p>
-              <p className="serif-title mt-2 text-2xl font-semibold sm:text-3xl xl:text-[2.35rem]">
-                {result.snake.commonName}
-              </p>
-              <p className="mt-1 text-sm text-stone-200/82">{result.snake.scientificName}</p>
-            </div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
+      {result ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-[rgba(19,26,17,0.78)] via-[rgba(19,26,17,0.18)] to-transparent px-5 pb-5 pt-20 text-stone-50 sm:px-6 sm:pb-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-stone-200/78">
+            Closest match
+          </p>
+          <p className="serif-title mt-2 text-2xl font-semibold sm:text-3xl xl:text-[2.35rem]">
+            {result.snake.commonName}
+          </p>
+          <p className="mt-1 text-sm text-stone-200/82">{result.snake.scientificName}</p>
+        </div>
+      ) : null}
 
-      {!isMatching && !result && !hasStroke ? (
+      {!isMatching && !result && points.length === 0 ? (
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          className="absolute inset-0 flex items-center justify-center px-8 text-center text-sm leading-6 text-[var(--muted)] sm:text-base"
+          className="pointer-events-none absolute inset-0 flex items-center justify-center px-8 text-center text-sm leading-6 text-[var(--muted)] sm:text-base"
         >
-          Draw a single continuous line, then press match to reveal the closest snake in this same frame.
+          Draw one continuous line, then press match to compare it against extracted snake photo lines.
         </motion.div>
       ) : null}
     </div>

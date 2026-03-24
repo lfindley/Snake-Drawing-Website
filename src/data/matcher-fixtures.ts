@@ -23,8 +23,8 @@ export const matcherFixtures: MatcherFixture[] = [
     expectedTopPhotoId: "masticophis-flagellum/97566ca025.jpg",
     expectedTop3Species: [
       "masticophis-flagellum",
-      "crotalus-viridis",
       "pantherophis-alleghaniensis",
+      "pantherophis-obsoletus",
     ],
     points: buildStroke([
       [22, 174],
@@ -45,11 +45,11 @@ export const matcherFixtures: MatcherFixture[] = [
   {
     id: "compact-heavy-coils",
     description: "Image-backed baseline for a compact coiled stroke.",
-    expectedTopPhotoId: "crotalus-viridis/a7b337a07b.jpg",
+    expectedTopPhotoId: "crotalus-viridis/fecfe97307.jpg",
     expectedTop3Species: [
       "crotalus-viridis",
       "crotalus-scutulatus",
-      "pituophis-catenifer",
+      "lampropeltis-californiae",
     ],
     points: buildStroke([
       [280, 160],
@@ -72,10 +72,10 @@ export const matcherFixtures: MatcherFixture[] = [
   {
     id: "broad-smooth-constrictor",
     description: "Image-backed baseline for a broad smooth curve.",
-    expectedTopPhotoId: "masticophis-flagellum/0ec060ea74.jpg",
+    expectedTopPhotoId: "pantherophis-alleghaniensis/d943bdd6ef.jpg",
     expectedTop3Species: [
-      "masticophis-flagellum",
       "pantherophis-alleghaniensis",
+      "masticophis-flagellum",
       "opheodrys-aestivus",
     ],
     points: buildStroke([

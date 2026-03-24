@@ -1,10 +1,18 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { matcherFixtures } from "../src/data/matcher-fixtures";
 import { rankSnakeMatches } from "../src/lib/match-snake";
+import type { PhotoShapeDataset } from "../src/lib/types";
+
+const datasetPath = resolve(process.cwd(), "public", "data", "photo-shape-dataset.generated.json");
+const dataset = JSON.parse(readFileSync(datasetPath, "utf8")) as PhotoShapeDataset;
+const usablePhotoRecords = dataset.records.filter((record) => record.usable);
 
 let failed = false;
 
 for (const fixture of matcherFixtures) {
-  const ranked = rankSnakeMatches(fixture.points, 3);
+  const ranked = rankSnakeMatches(fixture.points, usablePhotoRecords, 3);
   const rankedIds = ranked.map((entry) => entry.snake.id);
   const topPhotoId = ranked[0]?.photo.id;
   const missing = fixture.expectedTop3Species.filter((id) => !rankedIds.includes(id));

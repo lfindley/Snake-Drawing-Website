@@ -1,4 +1,3 @@
-import { usablePhotoShapeRecords } from "@/data/photo-shapes";
 import { snakeProfiles } from "@/data/snakes";
 import { extractStrokeFeatures } from "@/lib/extract-features";
 import { clamp } from "@/lib/geometry";
@@ -7,39 +6,20 @@ import { normalizeStroke } from "@/lib/normalize-stroke";
 import type {
   FeatureBreakdown,
   MatchResult,
+  NormalizedPathPoint,
+  PhotoLineFeatures,
   PhotoShapeRecord,
   StrokeFeatures,
   StrokePoint,
 } from "@/lib/types";
 
-const silhouetteWeight = 0.72;
-const speciesProfileWeight = 0.28;
-
-const featureWeights = {
-  aspectRatio: 0.22,
-  fillRatio: 0.18,
-  compactness: 0.18,
-  huMoment1: 0.18,
-  huMoment2: 0.14,
-  huMoment3: 0.1,
-} as const;
-
-const featureLabels: Record<keyof typeof featureWeights, string> = {
-  aspectRatio: "Aspect ratio",
-  fillRatio: "Fill ratio",
-  compactness: "Compactness",
-  huMoment1: "Hu moment 1",
-  huMoment2: "Hu moment 2",
-  huMoment3: "Hu moment 3",
-};
-
-const speciesFeatureWeights = {
+const lineFeatureWeights: Record<keyof PhotoLineFeatures, number> = {
   pathLength: 0.18,
   aspectRatio: 0.27,
   curvature: 0.24,
   turnVariance: 0.11,
   waviness: 0.2,
-} as const;
+};
 
 function normalizedDifference(a: number, b: number) {
   return Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b), 1);
@@ -57,33 +37,59 @@ function confidenceLabel(score: number): MatchResult["confidenceLabel"] {
   return "Low";
 }
 
-function buildBreakdown(
+function toStrokePoints(points: NormalizedPathPoint[]): StrokePoint[] {
+  return points.map((point, index) => ({
+    x: point.x,
+    y: point.y,
+    t: index,
+  }));
+}
+
+function compareNormalizedPaths(a: StrokePoint[], b: StrokePoint[]) {
+  const sampleCount = Math.min(a.length, b.length);
+  if (sampleCount < 2) {
+    return 1;
+  }
+
+  let forward = 0;
+  let reverse = 0;
+
+  for (let index = 0; index < sampleCount; index += 1) {
+    const pointA = a[index];
+    const pointForward = b[index];
+    const pointReverse = b[sampleCount - 1 - index];
+
+    forward += Math.hypot(pointA.x - pointForward.x, pointA.y - pointForward.y);
+    reverse += Math.hypot(pointA.x - pointReverse.x, pointA.y - pointReverse.y);
+  }
+
+  return Math.min(forward, reverse) / sampleCount;
+}
+
+function lineFeatureDistance(strokeFeatures: StrokeFeatures, photoFeatures: PhotoLineFeatures) {
+  return (Object.keys(lineFeatureWeights) as Array<keyof PhotoLineFeatures>).reduce(
+    (total, key) => {
+      return total + normalizedDifference(strokeFeatures[key], photoFeatures[key]) * lineFeatureWeights[key];
+    },
+    0,
+  );
+}
+
+function silhouetteDistance(
   strokeFeatures: ReturnType<typeof extractStrokeSilhouetteFeatures>,
-  photoFeatures: PhotoShapeRecord["features"],
-): FeatureBreakdown[] {
-  const comparable = {
-    aspectRatio: [strokeFeatures.aspectRatio, photoFeatures.aspectRatio],
-    fillRatio: [strokeFeatures.fillRatio, photoFeatures.fillRatio],
-    compactness: [strokeFeatures.compactness, photoFeatures.compactness],
-    huMoment1: [strokeFeatures.huMoments[0] ?? 0, photoFeatures.huMoments[0] ?? 0],
-    huMoment2: [strokeFeatures.huMoments[1] ?? 0, photoFeatures.huMoments[1] ?? 0],
-    huMoment3: [strokeFeatures.huMoments[2] ?? 0, photoFeatures.huMoments[2] ?? 0],
-  } as const;
+  photo: PhotoShapeRecord,
+) {
+  const huA = strokeFeatures.huMoments;
+  const huB = photo.features.huMoments;
 
-  return (Object.keys(featureWeights) as Array<keyof typeof featureWeights>)
-    .map((key) => {
-      const [strokeValue, candidateValue] = comparable[key];
-      const similarity = 1 - normalizedDifference(strokeValue, candidateValue);
-
-      return {
-        key,
-        label: featureLabels[key],
-        strokeValue,
-        candidateValue,
-        similarity: clamp(similarity, 0, 1),
-      };
-    })
-    .sort((a, b) => b.similarity - a.similarity);
+  return (
+    normalizedDifference(strokeFeatures.aspectRatio, photo.features.aspectRatio) * 0.22 +
+    normalizedDifference(strokeFeatures.fillRatio, photo.features.fillRatio) * 0.2 +
+    normalizedDifference(strokeFeatures.compactness, photo.features.compactness) * 0.2 +
+    normalizedDifference(huA[0] ?? 0, huB[0] ?? 0) * 0.18 +
+    normalizedDifference(huA[1] ?? 0, huB[1] ?? 0) * 0.12 +
+    normalizedDifference(huA[2] ?? 0, huB[2] ?? 0) * 0.08
+  );
 }
 
 function speciesProfileDistance(strokeFeatures: StrokeFeatures, snakeId: string) {
@@ -92,80 +98,160 @@ function speciesProfileDistance(strokeFeatures: StrokeFeatures, snakeId: string)
     return 1;
   }
 
-  return (Object.keys(speciesFeatureWeights) as Array<keyof typeof speciesFeatureWeights>).reduce(
-    (total, key) => {
-      return (
-        total +
-        normalizedDifference(strokeFeatures[key], snake.shapeProfile[key]) * speciesFeatureWeights[key]
-      );
-    },
-    0,
-  );
+  return lineFeatureDistance(strokeFeatures, snake.shapeProfile);
 }
 
-function scorePhotoMatch(
-  strokeSilhouetteFeatures: ReturnType<typeof extractStrokeSilhouetteFeatures>,
-  strokeProfileFeatures: StrokeFeatures,
-  photo: PhotoShapeRecord,
-) {
-  const values = {
-    aspectRatio: [strokeSilhouetteFeatures.aspectRatio, photo.features.aspectRatio],
-    fillRatio: [strokeSilhouetteFeatures.fillRatio, photo.features.fillRatio],
-    compactness: [strokeSilhouetteFeatures.compactness, photo.features.compactness],
-    huMoment1: [strokeSilhouetteFeatures.huMoments[0] ?? 0, photo.features.huMoments[0] ?? 0],
-    huMoment2: [strokeSilhouetteFeatures.huMoments[1] ?? 0, photo.features.huMoments[1] ?? 0],
-    huMoment3: [strokeSilhouetteFeatures.huMoments[2] ?? 0, photo.features.huMoments[2] ?? 0],
-  } as const;
-
-  const distance = (Object.keys(featureWeights) as Array<keyof typeof featureWeights>).reduce(
-    (total, key) => {
-      const [strokeValue, photoValue] = values[key];
-      return total + normalizedDifference(strokeValue, photoValue) * featureWeights[key];
+function buildBreakdown(args: {
+  linePathDistance: number;
+  strokeLineFeatures: StrokeFeatures;
+  photo: PhotoShapeRecord;
+  strokeSilhouetteFeatures: ReturnType<typeof extractStrokeSilhouetteFeatures>;
+}): FeatureBreakdown[] {
+  const entries: FeatureBreakdown[] = [
+    {
+      key: "linePath",
+      label: "Detected line path",
+      strokeValue: 0,
+      candidateValue: args.linePathDistance,
+      similarity: clamp(1 - args.linePathDistance / 1.1, 0, 1),
     },
-    0,
-  );
-  const heuristicDistance = speciesProfileDistance(strokeProfileFeatures, photo.snakeId);
-  const combinedDistance =
-    distance * silhouetteWeight + heuristicDistance * speciesProfileWeight;
+    {
+      key: "lineAspectRatio",
+      label: "Line body ratio",
+      strokeValue: args.strokeLineFeatures.aspectRatio,
+      candidateValue: args.photo.lineFeatures.aspectRatio,
+      similarity: clamp(
+        1 - normalizedDifference(args.strokeLineFeatures.aspectRatio, args.photo.lineFeatures.aspectRatio),
+        0,
+        1,
+      ),
+    },
+    {
+      key: "lineCurvature",
+      label: "Line curvature",
+      strokeValue: args.strokeLineFeatures.curvature,
+      candidateValue: args.photo.lineFeatures.curvature,
+      similarity: clamp(
+        1 - normalizedDifference(args.strokeLineFeatures.curvature, args.photo.lineFeatures.curvature),
+        0,
+        1,
+      ),
+    },
+    {
+      key: "silhouetteCompactness",
+      label: "Silhouette compactness",
+      strokeValue: args.strokeSilhouetteFeatures.compactness,
+      candidateValue: args.photo.features.compactness,
+      similarity: clamp(
+        1 - normalizedDifference(args.strokeSilhouetteFeatures.compactness, args.photo.features.compactness),
+        0,
+        1,
+      ),
+    },
+    {
+      key: "silhouetteFill",
+      label: "Silhouette fill",
+      strokeValue: args.strokeSilhouetteFeatures.fillRatio,
+      candidateValue: args.photo.features.fillRatio,
+      similarity: clamp(
+        1 - normalizedDifference(args.strokeSilhouetteFeatures.fillRatio, args.photo.features.fillRatio),
+        0,
+        1,
+      ),
+    },
+  ];
+
+  return entries.sort((a, b) => b.similarity - a.similarity);
+}
+
+function scorePhotoMatch(args: {
+  strokePath: StrokePoint[];
+  strokeLineFeatures: StrokeFeatures;
+  strokeSilhouetteFeatures: ReturnType<typeof extractStrokeSilhouetteFeatures>;
+  photo: PhotoShapeRecord;
+}) {
+  const { strokePath, strokeLineFeatures, strokeSilhouetteFeatures, photo } = args;
+  const linePoints = toStrokePoints(photo.linePoints);
+  const linePathDistance = photo.lineUsable ? compareNormalizedPaths(strokePath, linePoints) : 1;
+  const lineFeaturesDistance = photo.lineUsable
+    ? lineFeatureDistance(strokeLineFeatures, photo.lineFeatures)
+    : 1;
+  const photoSilhouetteDistance = silhouetteDistance(strokeSilhouetteFeatures, photo);
+  const profileDistance = speciesProfileDistance(strokeLineFeatures, photo.snakeId);
+
+  const lineBlend = photo.lineUsable ? clamp(photo.lineQualityScore, 0.35, 1) : 0;
+  const linePathWeight = 0.42 * lineBlend;
+  const lineFeaturesWeight = 0.2 * lineBlend;
+  const silhouetteWeight = photo.lineUsable ? 0.26 : 0.72;
+  const profileWeight = photo.lineUsable ? 0.12 : 0.28;
+  const normalizer = linePathWeight + lineFeaturesWeight + silhouetteWeight + profileWeight;
+
+  const distance =
+    (linePathDistance * linePathWeight +
+      lineFeaturesDistance * lineFeaturesWeight +
+      photoSilhouetteDistance * silhouetteWeight +
+      profileDistance * profileWeight) /
+    Math.max(normalizer, 1e-6);
 
   return {
-    distance: combinedDistance,
-    breakdown: buildBreakdown(strokeSilhouetteFeatures, photo.features),
+    distance,
+    breakdown: buildBreakdown({
+      linePathDistance,
+      strokeLineFeatures,
+      photo,
+      strokeSilhouetteFeatures,
+    }),
   };
 }
 
-export function matchSnake(points: StrokePoint[]): MatchResult | null {
-  if (points.length < 3 || usablePhotoShapeRecords.length === 0) {
-    return null;
-  }
-
-  const normalizedPoints = normalizeStroke(points);
-  const strokeProfileFeatures = extractStrokeFeatures(normalizedPoints);
+function rankPhotoCandidates(points: StrokePoint[], photoRecords: PhotoShapeRecord[]) {
+  const strokePath = normalizeStroke(points);
+  const strokeLineFeatures = extractStrokeFeatures(strokePath);
   const strokeSilhouetteFeatures = extractStrokeSilhouetteFeatures(points);
 
-  const bestBySpecies = new Map<string, { snake: MatchResult["snake"]; photo: PhotoShapeRecord; distance: number; breakdown: FeatureBreakdown[] }>();
+  const bestBySpecies = new Map<
+    string,
+    {
+      snake: MatchResult["snake"];
+      photo: PhotoShapeRecord;
+      distance: number;
+      breakdown: FeatureBreakdown[];
+    }
+  >();
 
-  usablePhotoShapeRecords.forEach((photo) => {
-    const ranked = scorePhotoMatch(strokeSilhouetteFeatures, strokeProfileFeatures, photo);
+  photoRecords.forEach((photo) => {
     const snake = snakeProfiles.find((entry) => entry.id === photo.snakeId);
-
     if (!snake) {
       return;
     }
 
+    const scored = scorePhotoMatch({
+      strokePath,
+      strokeLineFeatures,
+      strokeSilhouetteFeatures,
+      photo,
+    });
+
     const existing = bestBySpecies.get(photo.snakeId);
-    if (!existing || ranked.distance < existing.distance) {
+    if (!existing || scored.distance < existing.distance) {
       bestBySpecies.set(photo.snakeId, {
         snake,
         photo,
-        distance: ranked.distance,
-        breakdown: ranked.breakdown,
+        distance: scored.distance,
+        breakdown: scored.breakdown,
       });
     }
   });
 
-  const ranked = Array.from(bestBySpecies.values()).sort((a, b) => a.distance - b.distance);
+  return Array.from(bestBySpecies.values()).sort((a, b) => a.distance - b.distance);
+}
 
+export function matchSnake(points: StrokePoint[], photoRecords: PhotoShapeRecord[]): MatchResult | null {
+  if (points.length < 3 || photoRecords.length === 0) {
+    return null;
+  }
+
+  const ranked = rankPhotoCandidates(points, photoRecords);
   const best = ranked[0];
   if (!best) {
     return null;
@@ -179,40 +265,24 @@ export function matchSnake(points: StrokePoint[]): MatchResult | null {
     score,
     confidenceLabel: confidenceLabel(score),
     featureBreakdown: best.breakdown,
+    overlay: {
+      silhouetteAvailable: best.photo.silhouettePolygon.length > 2,
+      photoAvailable: best.photo.silhouettePolygon.length > 2,
+      lineAvailable: best.photo.lineUsable && best.photo.linePoints.length > 2,
+    },
   };
 }
 
-export function rankSnakeMatches(points: StrokePoint[], limit = 5) {
-  if (points.length < 3 || usablePhotoShapeRecords.length === 0) {
+export function rankSnakeMatches(points: StrokePoint[], photoRecords: PhotoShapeRecord[], limit = 5) {
+  if (points.length < 3 || photoRecords.length === 0) {
     return [];
   }
 
-  const normalizedPoints = normalizeStroke(points);
-  const strokeProfileFeatures = extractStrokeFeatures(normalizedPoints);
-  const strokeSilhouetteFeatures = extractStrokeSilhouetteFeatures(points);
-
-  const bestBySpecies = new Map<string, { snake: MatchResult["snake"]; photo: PhotoShapeRecord; score: number }>();
-
-  usablePhotoShapeRecords.forEach((photo) => {
-      const snake = snakeProfiles.find((entry) => entry.id === photo.snakeId);
-      if (!snake) {
-        return;
-      }
-
-      const { distance } = scorePhotoMatch(strokeSilhouetteFeatures, strokeProfileFeatures, photo);
-      const score = Math.round(clamp((1 - distance) * 100, 8, 98));
-      const existing = bestBySpecies.get(photo.snakeId);
-
-      if (!existing || score > existing.score) {
-        bestBySpecies.set(photo.snakeId, {
-        snake,
-        photo,
-        score,
-        });
-      }
-    });
-
-  return Array.from(bestBySpecies.values())
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit);
+  return rankPhotoCandidates(points, photoRecords)
+    .slice(0, limit)
+    .map((entry) => ({
+      snake: entry.snake,
+      photo: entry.photo,
+      score: Math.round(clamp((1 - entry.distance) * 100, 8, 98)),
+    }));
 }
