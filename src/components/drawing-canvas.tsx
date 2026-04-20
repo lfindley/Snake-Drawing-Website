@@ -25,10 +25,43 @@ export function DrawingCanvas({
   overlay,
 }: DrawingCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const interactionRef = useRef<HTMLDivElement | null>(null);
   const activeStrokeRef = useRef<StrokePoint[]>(points);
   const drawingRef = useRef(false);
   const pointerIdRef = useRef<number | null>(null);
+
+  const appendPoint = (clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) {
+      return;
+    }
+
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const point = {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+      t: Date.now(),
+    };
+
+    const currentPoints = activeStrokeRef.current;
+    const previousPoint = currentPoints[currentPoints.length - 1];
+    const duplicate =
+      previousPoint &&
+      Math.hypot(previousPoint.x - point.x, previousPoint.y - point.y) < 1.5;
+
+    if (duplicate) {
+      return;
+    }
+
+    const nextPoints = [...currentPoints, point];
+    activeStrokeRef.current = nextPoints;
+    onChange(nextPoints);
+  };
 
   const beginStroke = (clientX: number, clientY: number) => {
     onStrokeStart?.();
@@ -79,37 +112,6 @@ export function DrawingCanvas({
     context.stroke();
   }, [points]);
 
-  const appendPoint = (clientX: number, clientY: number) => {
-    const canvas = canvasRef.current;
-    const interactionLayer = interactionRef.current;
-    if (!canvas || !interactionLayer) {
-      return;
-    }
-
-    const rect = interactionLayer.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const point = {
-      x: (clientX - rect.left) * scaleX,
-      y: (clientY - rect.top) * scaleY,
-      t: Date.now(),
-    };
-
-    const currentPoints = activeStrokeRef.current;
-    const previousPoint = currentPoints[currentPoints.length - 1];
-    const duplicate =
-      previousPoint &&
-      Math.hypot(previousPoint.x - point.x, previousPoint.y - point.y) < 1.5;
-
-    if (duplicate) {
-      return;
-    }
-
-    const nextPoints = [...currentPoints, point];
-    activeStrokeRef.current = nextPoints;
-    onChange(nextPoints);
-  };
-
   return (
     <div className="relative overflow-hidden rounded-[1.8rem] border border-[var(--line)] bg-[#f8f1df] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)]">
       <div className="canvas-grid relative overflow-hidden rounded-[1.35rem] border border-[rgba(49,72,44,0.14)] bg-[linear-gradient(180deg,rgba(255,255,255,0.4),rgba(244,234,212,0.3))]">
@@ -117,16 +119,15 @@ export function DrawingCanvas({
           ref={canvasRef}
           width={CANVAS_WIDTH}
           height={CANVAS_HEIGHT}
-          className={`relative z-10 block h-[320px] w-full select-none transition-opacity duration-500 sm:h-[420px] lg:h-[520px] xl:h-[620px] ${className ?? ""}`}
-        />
-        {overlay ? <div className="pointer-events-none absolute inset-0 z-20">{overlay}</div> : null}
-        <div
-          ref={interactionRef}
-          className="pointer-events-auto absolute inset-0 z-30 cursor-crosshair touch-none"
+          className={`relative z-10 block h-[320px] w-full cursor-crosshair touch-none select-none transition-opacity duration-500 sm:h-[420px] lg:h-[520px] xl:h-[620px] ${className ?? ""}`}
           onPointerDown={(event) => {
             event.preventDefault();
             pointerIdRef.current = event.pointerId;
-            interactionRef.current?.setPointerCapture(event.pointerId);
+            try {
+              event.currentTarget.setPointerCapture(event.pointerId);
+            } catch {
+              // Some browsers reject capture for synthetic or interrupted pointer streams.
+            }
             beginStroke(event.clientX, event.clientY);
           }}
           onPointerMove={(event) => {
@@ -137,14 +138,20 @@ export function DrawingCanvas({
             appendPoint(event.clientX, event.clientY);
           }}
           onPointerUp={(event) => {
-            if (pointerIdRef.current === event.pointerId) {
-              interactionRef.current?.releasePointerCapture(event.pointerId);
+            if (
+              pointerIdRef.current === event.pointerId &&
+              event.currentTarget.hasPointerCapture(event.pointerId)
+            ) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
             }
             endStroke();
           }}
           onPointerCancel={(event) => {
-            if (pointerIdRef.current === event.pointerId) {
-              interactionRef.current?.releasePointerCapture(event.pointerId);
+            if (
+              pointerIdRef.current === event.pointerId &&
+              event.currentTarget.hasPointerCapture(event.pointerId)
+            ) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
             }
             endStroke();
           }}
@@ -152,6 +159,7 @@ export function DrawingCanvas({
             endStroke();
           }}
         />
+        {overlay ? <div className="pointer-events-none absolute inset-0 z-20">{overlay}</div> : null}
 
         {points.length === 0 ? (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-sm leading-6 text-[var(--muted)] sm:text-base xl:text-[1.02rem]">
