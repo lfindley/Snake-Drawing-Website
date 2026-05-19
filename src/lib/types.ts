@@ -9,6 +9,13 @@ export type NormalizedPathPoint = {
   y: number;
 };
 
+export type NormalizedBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 export type StrokeFeatures = {
   pathLength: number;
   aspectRatio: number;
@@ -48,6 +55,8 @@ export type PhotoShapeRecord = {
   extractionNotes: string[];
   features: SilhouetteFeatures;
   silhouettePolygon: NormalizedPathPoint[];
+  matchSilhouettePolygon: NormalizedPathPoint[];
+  subjectBounds: NormalizedBounds;
   linePoints: NormalizedPathPoint[];
   lineFeatures: PhotoLineFeatures;
   lineQualityScore: number;

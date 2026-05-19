@@ -1,6 +1,6 @@
 import { clamp } from "@/lib/geometry";
 import { normalizeStroke } from "@/lib/normalize-stroke";
-import type { SilhouetteFeatures, StrokePoint } from "@/lib/types";
+import type { NormalizedPathPoint, SilhouetteFeatures, StrokePoint } from "@/lib/types";
 
 const MASK_SIZE = 96;
 const DRAW_RADIUS = 4;
@@ -50,6 +50,64 @@ function rasterizeSegment(
   for (let step = 0; step <= steps; step += 1) {
     const progress = step / steps;
     drawDisc(mask, size, fromX + dx * progress, fromY + dy * progress, radius);
+  }
+}
+
+function projectLineSpaceValue(value: number, padding: number, drawableSize: number) {
+  return padding + (value + 0.5) * drawableSize;
+}
+
+function projectLineSpacePoints(
+  points: Array<Pick<NormalizedPathPoint, "x" | "y">>,
+  size: number,
+  padding: number,
+) {
+  const drawableSize = size - padding * 2 - 1;
+
+  return points.map((point) => ({
+    x: projectLineSpaceValue(point.x, padding, drawableSize),
+    y: projectLineSpaceValue(point.y, padding, drawableSize),
+  }));
+}
+
+function pointInPolygon(
+  pointX: number,
+  pointY: number,
+  polygon: Array<Pick<NormalizedPathPoint, "x" | "y">>,
+) {
+  let inside = false;
+
+  for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) {
+    const current = polygon[index];
+    const prior = polygon[previous];
+    const denominator = prior.y - current.y || (prior.y >= current.y ? 1e-9 : -1e-9);
+    const intersects =
+      current.y > pointY !== prior.y > pointY &&
+      pointX < ((prior.x - current.x) * (pointY - current.y)) / denominator + current.x;
+
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+
+  return inside;
+}
+
+function fillPolygon(
+  mask: Uint8Array,
+  size: number,
+  polygon: Array<Pick<NormalizedPathPoint, "x" | "y">>,
+) {
+  if (polygon.length < 3) {
+    return;
+  }
+
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      if (pointInPolygon(x + 0.5, y + 0.5, polygon)) {
+        setPixel(mask, size, x, y);
+      }
+    }
   }
 }
 
@@ -239,32 +297,117 @@ export function extractMaskShapeFeatures(mask: Uint8Array, size = MASK_SIZE): Si
   };
 }
 
+export function buildNormalizedStrokeMask(points: StrokePoint[], size = MASK_SIZE) {
+  const normalizedPoints = normalizeStroke(points);
+  return buildNormalizedPathMask(normalizedPoints, size);
+}
+
+export function buildNormalizedPathMask(
+  points: Array<Pick<NormalizedPathPoint, "x" | "y">>,
+  size = MASK_SIZE,
+  radius = DRAW_RADIUS,
+) {
+  const mask = createMask(size);
+  if (points.length < 2) {
+    return mask;
+  }
+
+  const padding = radius * 3;
+  const projectedPoints = projectLineSpacePoints(points, size, padding);
+
+  for (let index = 1; index < projectedPoints.length; index += 1) {
+    const previous = projectedPoints[index - 1];
+    const current = projectedPoints[index];
+
+    rasterizeSegment(
+      mask,
+      size,
+      previous.x,
+      previous.y,
+      current.x,
+      current.y,
+      radius,
+    );
+  }
+
+  return mask;
+}
+
+export function buildNormalizedPolygonMask(
+  polygon: Array<Pick<NormalizedPathPoint, "x" | "y">>,
+  size = MASK_SIZE,
+) {
+  const mask = createMask(size);
+  if (polygon.length < 3) {
+    return mask;
+  }
+
+  const padding = DRAW_RADIUS * 3;
+  const projectedPolygon = projectLineSpacePoints(polygon, size, padding);
+
+  fillPolygon(mask, size, projectedPolygon);
+
+  for (let index = 0; index < projectedPolygon.length; index += 1) {
+    const current = projectedPolygon[index];
+    const next = projectedPolygon[(index + 1) % projectedPolygon.length];
+    rasterizeSegment(mask, size, current.x, current.y, next.x, next.y, 1);
+  }
+
+  return mask;
+}
+
+export function buildNormalizedPolygonOutlineMask(
+  polygon: Array<Pick<NormalizedPathPoint, "x" | "y">>,
+  size = MASK_SIZE,
+  radius = DRAW_RADIUS,
+) {
+  const mask = createMask(size);
+  if (polygon.length < 3) {
+    return mask;
+  }
+
+  const padding = radius * 3;
+  const projectedPolygon = projectLineSpacePoints(polygon, size, padding);
+
+  for (let index = 0; index < projectedPolygon.length; index += 1) {
+    const current = projectedPolygon[index];
+    const next = projectedPolygon[(index + 1) % projectedPolygon.length];
+    rasterizeSegment(mask, size, current.x, current.y, next.x, next.y, radius);
+  }
+
+  return mask;
+}
+
+export function maskIntersectionOverUnion(maskA: Uint8Array, maskB: Uint8Array) {
+  if (maskA.length !== maskB.length) {
+    return 0;
+  }
+
+  let intersection = 0;
+  let union = 0;
+
+  for (let index = 0; index < maskA.length; index += 1) {
+    const a = maskA[index] > 0;
+    const b = maskB[index] > 0;
+
+    if (a && b) {
+      intersection += 1;
+    }
+
+    if (a || b) {
+      union += 1;
+    }
+  }
+
+  return union === 0 ? 0 : intersection / union;
+}
+
 export function extractStrokeSilhouetteFeatures(points: StrokePoint[], size = MASK_SIZE) {
   if (points.length < 2) {
     return extractMaskShapeFeatures(createMask(size), size);
   }
 
-  const mask = createMask(size);
-  const normalizedPoints = normalizeStroke(points);
-  const padding = DRAW_RADIUS * 3;
-  const drawableSize = size - padding * 2 - 1;
-
-  const project = (value: number) => padding + (value + 0.5) * drawableSize;
-
-  for (let index = 1; index < normalizedPoints.length; index += 1) {
-    const previous = normalizedPoints[index - 1];
-    const current = normalizedPoints[index];
-
-    rasterizeSegment(
-      mask,
-      size,
-      project(previous.x),
-      project(previous.y),
-      project(current.x),
-      project(current.y),
-      DRAW_RADIUS,
-    );
-  }
+  const mask = buildNormalizedStrokeMask(points, size);
 
   return extractMaskShapeFeatures(mask, size);
 }

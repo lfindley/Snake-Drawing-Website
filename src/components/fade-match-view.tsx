@@ -1,8 +1,10 @@
 "use client";
 
 import { AnimatePresence, motion } from "motion/react";
+import Image from "next/image";
 
 import { boundingBox, clamp } from "@/lib/geometry";
+import { buildSvgPath, getPhotoAlignmentFrameStyle } from "@/lib/photo-overlay";
 import type { MatchResult, StrokePoint } from "@/lib/types";
 
 type OverlayViewMode = "line" | "photo" | "both";
@@ -59,6 +61,9 @@ export function FadeMatchView({
     bounds !== null &&
     result.overlay.photoAvailable &&
     (viewMode === "photo" || viewMode === "both");
+  const showOutline = result !== null && bounds !== null && viewMode === "both";
+  const photoFrameStyle = result ? getPhotoAlignmentFrameStyle(result.photo.subjectBounds) : null;
+  const outlinePath = result ? buildSvgPath(result.photo.silhouettePolygon, true) : "";
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden rounded-[1.55rem]">
@@ -91,15 +96,39 @@ export function FadeMatchView({
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.6, ease: "easeOut" }}
-            className="pointer-events-none absolute"
+            className="pointer-events-none absolute overflow-hidden rounded-[1.2rem]"
             style={bounds}
           >
-            {showPhoto ? (
-              <img
-                src={result.photo.imagePath}
-                alt={result.snake.commonName}
-                className="h-full w-full rounded-[1.2rem] object-cover shadow-[0_18px_40px_rgba(20,31,17,0.18)]"
-              />
+            {showPhoto && photoFrameStyle ? (
+              <div className="absolute inset-0 overflow-hidden rounded-[1.2rem] shadow-[0_18px_40px_rgba(20,31,17,0.18)]">
+                <div className="absolute" style={photoFrameStyle}>
+                  <Image
+                    src={result.photo.imagePath}
+                    alt={result.snake.commonName}
+                    fill
+                    unoptimized
+                    sizes="100vw"
+                    className="object-fill"
+                  />
+                </div>
+              </div>
+            ) : null}
+
+            {showOutline && outlinePath ? (
+              <svg
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+                className="absolute inset-0 h-full w-full overflow-visible"
+              >
+                <path
+                  d={outlinePath}
+                  fill="rgba(255,252,244,0.12)"
+                  stroke="rgba(255,252,244,0.92)"
+                  strokeWidth="1.75"
+                  vectorEffect="non-scaling-stroke"
+                  strokeLinejoin="round"
+                />
+              </svg>
             ) : null}
           </motion.div>
         ) : null}

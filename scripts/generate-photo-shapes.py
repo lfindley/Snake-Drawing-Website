@@ -8,7 +8,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 
-import cv2
+try:
+    import cv2
+except ModuleNotFoundError:
+    cv2 = None
+
 import numpy as np
 
 
@@ -32,6 +36,8 @@ class ExtractionResult:
     extraction_notes: list[str]
     features: dict[str, object]
     silhouette_polygon: list[dict[str, float]]
+    match_silhouette_polygon: list[dict[str, float]]
+    subject_bounds: dict[str, float]
     line_points: list[dict[str, float]]
     line_features: dict[str, float | list[float]]
     line_quality_score: float
@@ -91,10 +97,13 @@ def resample_polyline(points: list[tuple[float, float]], target_count: int) -> l
     return result
 
 
-def normalize_polyline(points: list[tuple[float, float]], target_count: int = TARGET_LINE_POINTS) -> list[tuple[float, float]]:
+def normalization_transform(
+    points: list[tuple[float, float]],
+    target_count: int = TARGET_LINE_POINTS,
+) -> tuple[list[tuple[float, float]], tuple[float, float, float, float, float]]:
     resampled = resample_polyline(points, target_count)
     if not resampled:
-        return []
+        return [], (0.0, 0.0, 1.0, 0.0, 1.0)
 
     xs = [x for x, _ in resampled]
     ys = [y for _, y in resampled]
@@ -121,7 +130,28 @@ def normalize_polyline(points: list[tuple[float, float]], target_count: int = TA
     aligned_xs = [x for x, _ in aligned]
     aligned_ys = [y for _, y in aligned]
     scale = max(max(aligned_xs) - min(aligned_xs), max(aligned_ys) - min(aligned_ys), 1.0)
+    return [(x / scale, y / scale) for x, y in aligned], (center_x, center_y, cos_theta, sin_theta, scale)
+
+
+def apply_normalization_transform(
+    points: list[tuple[float, float]],
+    transform: tuple[float, float, float, float, float],
+) -> list[tuple[float, float]]:
+    center_x, center_y, cos_theta, sin_theta, scale = transform
+    translated = [(x - center_x, y - center_y) for x, y in points]
+    aligned = [
+        (
+            x * cos_theta - y * sin_theta,
+            x * sin_theta + y * cos_theta,
+        )
+        for x, y in translated
+    ]
     return [(x / scale, y / scale) for x, y in aligned]
+
+
+def normalize_polyline(points: list[tuple[float, float]], target_count: int = TARGET_LINE_POINTS) -> list[tuple[float, float]]:
+    normalized, _ = normalization_transform(points, target_count)
+    return normalized
 
 
 def standard_deviation(values: list[float]) -> float:
@@ -198,6 +228,31 @@ def normalize_polygon(contour: np.ndarray, target_count: int = TARGET_POLYGON_PO
 
     normalized = [((x - min_x) / width, (y - min_y) / height) for x, y in points]
     return resample_polyline(normalized + [normalized[0]], target_count)
+
+
+def normalize_polygon_for_matching(
+    contour: np.ndarray,
+    transform: tuple[float, float, float, float, float],
+    target_count: int = TARGET_POLYGON_POINTS,
+) -> list[tuple[float, float]]:
+    points = [(float(point[0][0]), float(point[0][1])) for point in contour]
+    if not points:
+        return []
+
+    normalized = apply_normalization_transform(points, transform)
+    return resample_polyline(normalized + [normalized[0]], target_count)
+
+
+def subject_bounds(contour: np.ndarray, image_shape: tuple[int, int]) -> dict[str, float]:
+    image_height, image_width = image_shape
+    x, y, width, height = cv2.boundingRect(contour)
+
+    return {
+        "x": round(x / max(image_width, 1), 6),
+        "y": round(y / max(image_height, 1), 6),
+        "width": round(width / max(image_width, 1), 6),
+        "height": round(height / max(image_height, 1), 6),
+    }
 
 
 def extract_centerline_points(component_mask: np.ndarray) -> tuple[list[tuple[float, float]], float, list[str]]:
@@ -387,17 +442,17 @@ def grabcut_component_mask(working: np.ndarray) -> tuple[np.ndarray | None, floa
     return component_mask, score, notes + contour_notes
 
 
-def build_component_mask(image: np.ndarray) -> tuple[np.ndarray | None, list[str]]:
+def build_component_mask(image: np.ndarray) -> tuple[np.ndarray | None, list[str], tuple[int, int]]:
     working = resize_for_processing(image)
     quick_mask, quick_score, quick_notes = quick_component_mask(working)
     if quick_mask is not None and quick_score >= 0.24 and "tiny-component" not in quick_notes:
-        return quick_mask, quick_notes
+        return quick_mask, quick_notes, working.shape[:2]
 
     fallback_mask, fallback_score, fallback_notes = grabcut_component_mask(working)
     if fallback_mask is not None and fallback_score >= quick_score:
-        return fallback_mask, ["used-grabcut"] + fallback_notes
+        return fallback_mask, ["used-grabcut"] + fallback_notes, working.shape[:2]
 
-    return quick_mask, quick_notes
+    return quick_mask, quick_notes, working.shape[:2]
 
 
 def extract_features(component_mask: np.ndarray) -> dict[str, object]:
@@ -436,6 +491,8 @@ def extract_record(image_path_str: str) -> dict[str, object]:
                 "huMoments": [0.0] * 7,
             },
             silhouette_polygon=[],
+            match_silhouette_polygon=[],
+            subject_bounds={"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0},
             line_points=[],
             line_features=extract_line_features([]),
             line_quality_score=0.0,
@@ -453,6 +510,8 @@ def extract_record(image_path_str: str) -> dict[str, object]:
             "extractionNotes": result.extraction_notes,
             "features": result.features,
             "silhouettePolygon": result.silhouette_polygon,
+            "matchSilhouettePolygon": result.match_silhouette_polygon,
+            "subjectBounds": result.subject_bounds,
             "linePoints": result.line_points,
             "lineFeatures": result.line_features,
             "lineQualityScore": result.line_quality_score,
@@ -460,7 +519,7 @@ def extract_record(image_path_str: str) -> dict[str, object]:
         }
 
     height, width = image.shape[:2]
-    component_mask, notes = build_component_mask(image)
+    component_mask, notes, working_shape = build_component_mask(image)
 
     if component_mask is None:
         result = ExtractionResult(
@@ -476,6 +535,8 @@ def extract_record(image_path_str: str) -> dict[str, object]:
                 "huMoments": [0.0] * 7,
             },
             silhouette_polygon=[],
+            match_silhouette_polygon=[],
+            subject_bounds={"x": 0.0, "y": 0.0, "width": 0.0, "height": 0.0},
             line_points=[],
             line_features=extract_line_features([]),
             line_quality_score=0.0,
@@ -493,6 +554,8 @@ def extract_record(image_path_str: str) -> dict[str, object]:
             "extractionNotes": result.extraction_notes,
             "features": result.features,
             "silhouettePolygon": result.silhouette_polygon,
+            "matchSilhouettePolygon": result.match_silhouette_polygon,
+            "subjectBounds": result.subject_bounds,
             "linePoints": result.line_points,
             "lineFeatures": result.line_features,
             "lineQualityScore": result.line_quality_score,
@@ -515,6 +578,7 @@ def extract_record(image_path_str: str) -> dict[str, object]:
         and features["compactness"] < 0.42
     )
     line_usable = usable and line_quality_score >= 0.42 and len(line_points) >= 24
+    normalized_line_points, line_transform = normalization_transform(line_points, TARGET_LINE_POINTS)
 
     result = ExtractionResult(
         width=width,
@@ -524,8 +588,10 @@ def extract_record(image_path_str: str) -> dict[str, object]:
         extraction_notes=all_notes,
         features=features,
         silhouette_polygon=point_dicts(normalize_polygon(contour)),
-        line_points=point_dicts(line_points),
-        line_features=extract_line_features(line_points),
+        match_silhouette_polygon=point_dicts(normalize_polygon_for_matching(contour, line_transform)),
+        subject_bounds=subject_bounds(contour, working_shape),
+        line_points=point_dicts(normalized_line_points),
+        line_features=extract_line_features(normalized_line_points),
         line_quality_score=line_quality_score,
         line_usable=line_usable,
     )
@@ -541,6 +607,8 @@ def extract_record(image_path_str: str) -> dict[str, object]:
         "extractionNotes": result.extraction_notes,
         "features": result.features,
         "silhouettePolygon": result.silhouette_polygon,
+        "matchSilhouettePolygon": result.match_silhouette_polygon,
+        "subjectBounds": result.subject_bounds,
         "linePoints": result.line_points,
         "lineFeatures": result.line_features,
         "lineQualityScore": result.line_quality_score,
@@ -549,6 +617,13 @@ def extract_record(image_path_str: str) -> dict[str, object]:
 
 
 def main() -> None:
+    if cv2 is None:
+        raise SystemExit(
+            "OpenCV (cv2) is required for full photo-shape generation. "
+            "If cv2 is unavailable, use scripts/augment-photo-shapes-fallback.py "
+            "with the bundled runtime to refresh the matcher dataset fields."
+        )
+
     image_paths = [
         str(image_path)
         for species_dir in sorted(path for path in RAW_ROOT.iterdir() if path.is_dir())

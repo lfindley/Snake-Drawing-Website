@@ -1,7 +1,12 @@
 import { snakeProfiles } from "@/data/snakes";
 import { extractStrokeFeatures } from "@/lib/extract-features";
 import { clamp } from "@/lib/geometry";
-import { extractStrokeSilhouetteFeatures } from "@/lib/mask-shape";
+import {
+  buildNormalizedPathMask,
+  buildNormalizedPolygonOutlineMask,
+  extractStrokeSilhouetteFeatures,
+  maskIntersectionOverUnion,
+} from "@/lib/mask-shape";
 import { normalizeStroke } from "@/lib/normalize-stroke";
 import type {
   FeatureBreakdown,
@@ -20,6 +25,8 @@ const lineFeatureWeights: Record<keyof PhotoLineFeatures, number> = {
   turnVariance: 0.11,
   waviness: 0.2,
 };
+
+const photoSilhouetteMaskCache = new Map<string, Uint8Array>();
 
 function normalizedDifference(a: number, b: number) {
   return Math.abs(a - b) / Math.max(Math.abs(a), Math.abs(b), 1);
@@ -75,23 +82,6 @@ function lineFeatureDistance(strokeFeatures: StrokeFeatures, photoFeatures: Phot
   );
 }
 
-function silhouetteDistance(
-  strokeFeatures: ReturnType<typeof extractStrokeSilhouetteFeatures>,
-  photo: PhotoShapeRecord,
-) {
-  const huA = strokeFeatures.huMoments;
-  const huB = photo.features.huMoments;
-
-  return (
-    normalizedDifference(strokeFeatures.aspectRatio, photo.features.aspectRatio) * 0.22 +
-    normalizedDifference(strokeFeatures.fillRatio, photo.features.fillRatio) * 0.2 +
-    normalizedDifference(strokeFeatures.compactness, photo.features.compactness) * 0.2 +
-    normalizedDifference(huA[0] ?? 0, huB[0] ?? 0) * 0.18 +
-    normalizedDifference(huA[1] ?? 0, huB[1] ?? 0) * 0.12 +
-    normalizedDifference(huA[2] ?? 0, huB[2] ?? 0) * 0.08
-  );
-}
-
 function speciesProfileDistance(strokeFeatures: StrokeFeatures, snakeId: string) {
   const snake = snakeProfiles.find((entry) => entry.id === snakeId);
   if (!snake) {
@@ -101,8 +91,21 @@ function speciesProfileDistance(strokeFeatures: StrokeFeatures, snakeId: string)
   return lineFeatureDistance(strokeFeatures, snake.shapeProfile);
 }
 
+function getPhotoSilhouetteMask(photo: PhotoShapeRecord) {
+  const cached = photoSilhouetteMaskCache.get(photo.id);
+  if (cached) {
+    return cached;
+  }
+
+  const mask = buildNormalizedPolygonOutlineMask(photo.matchSilhouettePolygon);
+  photoSilhouetteMaskCache.set(photo.id, mask);
+  return mask;
+}
+
 function buildBreakdown(args: {
   linePathDistance: number;
+  silhouetteDistance: number;
+  lineFeaturesDistance: number;
   strokeLineFeatures: StrokeFeatures;
   photo: PhotoShapeRecord;
   strokeSilhouetteFeatures: ReturnType<typeof extractStrokeSilhouetteFeatures>;
@@ -116,6 +119,20 @@ function buildBreakdown(args: {
       similarity: clamp(1 - args.linePathDistance / 1.1, 0, 1),
     },
     {
+      key: "silhouetteOverlap",
+      label: "Outline overlap",
+      strokeValue: 1,
+      candidateValue: 1 - args.silhouetteDistance,
+      similarity: clamp(1 - args.silhouetteDistance, 0, 1),
+    },
+    {
+      key: "lineFeatures",
+      label: "Line feature blend",
+      strokeValue: 1,
+      candidateValue: 1 - args.lineFeaturesDistance,
+      similarity: clamp(1 - args.lineFeaturesDistance, 0, 1),
+    },
+    {
       key: "lineAspectRatio",
       label: "Line body ratio",
       strokeValue: args.strokeLineFeatures.aspectRatio,
@@ -127,34 +144,12 @@ function buildBreakdown(args: {
       ),
     },
     {
-      key: "lineCurvature",
-      label: "Line curvature",
-      strokeValue: args.strokeLineFeatures.curvature,
-      candidateValue: args.photo.lineFeatures.curvature,
-      similarity: clamp(
-        1 - normalizedDifference(args.strokeLineFeatures.curvature, args.photo.lineFeatures.curvature),
-        0,
-        1,
-      ),
-    },
-    {
       key: "silhouetteCompactness",
-      label: "Silhouette compactness",
+      label: "Stroke compactness",
       strokeValue: args.strokeSilhouetteFeatures.compactness,
       candidateValue: args.photo.features.compactness,
       similarity: clamp(
         1 - normalizedDifference(args.strokeSilhouetteFeatures.compactness, args.photo.features.compactness),
-        0,
-        1,
-      ),
-    },
-    {
-      key: "silhouetteFill",
-      label: "Silhouette fill",
-      strokeValue: args.strokeSilhouetteFeatures.fillRatio,
-      candidateValue: args.photo.features.fillRatio,
-      similarity: clamp(
-        1 - normalizedDifference(args.strokeSilhouetteFeatures.fillRatio, args.photo.features.fillRatio),
         0,
         1,
       ),
@@ -164,39 +159,57 @@ function buildBreakdown(args: {
   return entries.sort((a, b) => b.similarity - a.similarity);
 }
 
+type MatchScore = {
+  distance: number;
+  linePathDistance: number;
+  silhouetteDistance: number;
+  lineFeaturesDistance: number;
+  breakdown: FeatureBreakdown[];
+};
+
 function scorePhotoMatch(args: {
   strokePath: StrokePoint[];
+  strokeMask: Uint8Array;
   strokeLineFeatures: StrokeFeatures;
   strokeSilhouetteFeatures: ReturnType<typeof extractStrokeSilhouetteFeatures>;
   photo: PhotoShapeRecord;
-}) {
-  const { strokePath, strokeLineFeatures, strokeSilhouetteFeatures, photo } = args;
+}): MatchScore {
+  const { strokePath, strokeMask, strokeLineFeatures, strokeSilhouetteFeatures, photo } = args;
   const linePoints = toStrokePoints(photo.linePoints);
-  const linePathDistance = photo.lineUsable ? compareNormalizedPaths(strokePath, linePoints) : 1;
-  const lineFeaturesDistance = photo.lineUsable
+  const hasLineGeometry = photo.lineUsable && linePoints.length > 2;
+  const hasSilhouetteGeometry = photo.matchSilhouettePolygon.length > 2;
+  const linePathDistance = hasLineGeometry ? compareNormalizedPaths(strokePath, linePoints) : 1;
+  const lineFeaturesDistance = hasLineGeometry
     ? lineFeatureDistance(strokeLineFeatures, photo.lineFeatures)
     : 1;
-  const photoSilhouetteDistance = silhouetteDistance(strokeSilhouetteFeatures, photo);
-  const profileDistance = speciesProfileDistance(strokeLineFeatures, photo.snakeId);
+  const silhouetteDistance = hasSilhouetteGeometry
+    ? 1 - maskIntersectionOverUnion(strokeMask, getPhotoSilhouetteMask(photo))
+    : 1;
 
-  const lineBlend = photo.lineUsable ? clamp(photo.lineQualityScore, 0.35, 1) : 0;
-  const linePathWeight = 0.42 * lineBlend;
-  const lineFeaturesWeight = 0.2 * lineBlend;
-  const silhouetteWeight = photo.lineUsable ? 0.26 : 0.72;
-  const profileWeight = photo.lineUsable ? 0.12 : 0.28;
-  const normalizer = linePathWeight + lineFeaturesWeight + silhouetteWeight + profileWeight;
+  let distance = 1;
 
-  const distance =
-    (linePathDistance * linePathWeight +
-      lineFeaturesDistance * lineFeaturesWeight +
-      photoSilhouetteDistance * silhouetteWeight +
-      profileDistance * profileWeight) /
-    Math.max(normalizer, 1e-6);
+  if (hasLineGeometry && hasSilhouetteGeometry) {
+    distance = linePathDistance * 0.6 + silhouetteDistance * 0.3 + lineFeaturesDistance * 0.1;
+  } else {
+    const profileDistance = speciesProfileDistance(strokeLineFeatures, photo.snakeId);
+    const fallbackGeometryDistance = hasLineGeometry
+      ? linePathDistance * 0.7 + lineFeaturesDistance * 0.2
+      : hasSilhouetteGeometry
+        ? silhouetteDistance * 0.8 + lineFeaturesDistance * 0.05
+        : 1;
+
+    distance = fallbackGeometryDistance + profileDistance * 0.1;
+  }
 
   return {
     distance,
+    linePathDistance,
+    silhouetteDistance,
+    lineFeaturesDistance,
     breakdown: buildBreakdown({
       linePathDistance,
+      silhouetteDistance,
+      lineFeaturesDistance,
       strokeLineFeatures,
       photo,
       strokeSilhouetteFeatures,
@@ -206,6 +219,7 @@ function scorePhotoMatch(args: {
 
 function rankPhotoCandidates(points: StrokePoint[], photoRecords: PhotoShapeRecord[]) {
   const strokePath = normalizeStroke(points);
+  const strokeMask = buildNormalizedPathMask(strokePath);
   const strokeLineFeatures = extractStrokeFeatures(strokePath);
   const strokeSilhouetteFeatures = extractStrokeSilhouetteFeatures(points);
 
@@ -215,6 +229,8 @@ function rankPhotoCandidates(points: StrokePoint[], photoRecords: PhotoShapeReco
       snake: MatchResult["snake"];
       photo: PhotoShapeRecord;
       distance: number;
+      linePathDistance: number;
+      silhouetteDistance: number;
       breakdown: FeatureBreakdown[];
     }
   >();
@@ -227,23 +243,50 @@ function rankPhotoCandidates(points: StrokePoint[], photoRecords: PhotoShapeReco
 
     const scored = scorePhotoMatch({
       strokePath,
+      strokeMask,
       strokeLineFeatures,
       strokeSilhouetteFeatures,
       photo,
     });
 
     const existing = bestBySpecies.get(photo.snakeId);
-    if (!existing || scored.distance < existing.distance) {
+    const shouldReplace =
+      !existing ||
+      scored.distance < existing.distance - 1e-6 ||
+      (Math.abs(scored.distance - existing.distance) <= 1e-6 &&
+        (scored.linePathDistance < existing.linePathDistance - 1e-6 ||
+          (Math.abs(scored.linePathDistance - existing.linePathDistance) <= 1e-6 &&
+            (scored.silhouetteDistance < existing.silhouetteDistance - 1e-6 ||
+              (Math.abs(scored.silhouetteDistance - existing.silhouetteDistance) <= 1e-6 &&
+                photo.qualityScore > existing.photo.qualityScore)))));
+
+    if (shouldReplace) {
       bestBySpecies.set(photo.snakeId, {
         snake,
         photo,
         distance: scored.distance,
+        linePathDistance: scored.linePathDistance,
+        silhouetteDistance: scored.silhouetteDistance,
         breakdown: scored.breakdown,
       });
     }
   });
 
-  return Array.from(bestBySpecies.values()).sort((a, b) => a.distance - b.distance);
+  return Array.from(bestBySpecies.values()).sort((a, b) => {
+    if (Math.abs(a.distance - b.distance) > 1e-6) {
+      return a.distance - b.distance;
+    }
+
+    if (Math.abs(a.linePathDistance - b.linePathDistance) > 1e-6) {
+      return a.linePathDistance - b.linePathDistance;
+    }
+
+    if (Math.abs(a.silhouetteDistance - b.silhouetteDistance) > 1e-6) {
+      return a.silhouetteDistance - b.silhouetteDistance;
+    }
+
+    return b.photo.qualityScore - a.photo.qualityScore;
+  });
 }
 
 export function matchSnake(points: StrokePoint[], photoRecords: PhotoShapeRecord[]): MatchResult | null {
@@ -266,7 +309,7 @@ export function matchSnake(points: StrokePoint[], photoRecords: PhotoShapeRecord
     confidenceLabel: confidenceLabel(score),
     featureBreakdown: best.breakdown,
     overlay: {
-      silhouetteAvailable: best.photo.silhouettePolygon.length > 2,
+      silhouetteAvailable: best.photo.matchSilhouettePolygon.length > 2,
       photoAvailable: best.photo.silhouettePolygon.length > 2,
       lineAvailable: best.photo.lineUsable && best.photo.linePoints.length > 2,
     },
