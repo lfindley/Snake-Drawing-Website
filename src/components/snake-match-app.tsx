@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CANVAS_HEIGHT, CANVAS_WIDTH } from "@/components/drawing-canvas";
 import { CanvasControls } from "@/components/canvas-controls";
@@ -9,7 +9,21 @@ import { DrawingCanvas } from "@/components/drawing-canvas";
 import { FadeMatchView } from "@/components/fade-match-view";
 import { featuredSnakeProfiles } from "@/data/snakes";
 import { matchSnake } from "@/lib/match-snake";
+import { normalizeStroke } from "@/lib/normalize-stroke";
 import type { MatchResult, PhotoShapeRecord, StrokePoint } from "@/lib/types";
+
+function buildNormalizedPath(points: Array<{ x: number; y: number }>): string {
+  if (points.length < 2) return "";
+  const cmds = [`M ${points[0].x.toFixed(3)} ${points[0].y.toFixed(3)}`];
+  for (let i = 1; i < points.length - 1; i++) {
+    const mx = ((points[i].x + points[i + 1].x) / 2).toFixed(3);
+    const my = ((points[i].y + points[i + 1].y) / 2).toFixed(3);
+    cmds.push(`Q ${points[i].x.toFixed(3)} ${points[i].y.toFixed(3)} ${mx} ${my}`);
+  }
+  const last = points[points.length - 1];
+  cmds.push(`L ${last.x.toFixed(3)} ${last.y.toFixed(3)}`);
+  return cmds.join(" ");
+}
 
 const MATCH_DELAY_MS = 850;
 type OverlayViewMode = "line" | "photo" | "both";
@@ -27,6 +41,16 @@ export function SnakeMatchApp() {
   const canSubmit = points.length > 2 && datasetReady;
   const hasResult = result !== null;
   const compactFacts = result?.snake.facts.slice(0, 2) ?? [];
+
+  const normalizedMatchedStroke = useMemo(
+    () => (matchedStroke.length >= 2 ? normalizeStroke(matchedStroke) : []),
+    [matchedStroke],
+  );
+  const normalizedUserPath = useMemo(() => buildNormalizedPath(normalizedMatchedStroke), [normalizedMatchedStroke]);
+  const snakeCenterlinePath = useMemo(
+    () => (result ? buildNormalizedPath(result.photo.linePoints) : ""),
+    [result],
+  );
 
   const clearPendingMatch = () => {
     if (matchTimerRef.current !== null) {
@@ -131,20 +155,27 @@ export function SnakeMatchApp() {
 
             {result ? (
               <div className="flex flex-wrap gap-2">
-                {(["line", "photo", "both"] as OverlayViewMode[]).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setViewMode(mode)}
-                    className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] transition ${
-                      viewMode === mode
-                        ? "border-[var(--accent-strong)] bg-[var(--accent-strong)] text-stone-50"
-                        : "border-[var(--line)] bg-white/72 text-[var(--muted)] hover:border-[var(--accent)] hover:bg-white"
-                    }`}
-                  >
-                    {mode}
-                  </button>
-                ))}
+                {(["photo", "line", "both"] as OverlayViewMode[]).map((mode) => {
+                  const labels: Record<OverlayViewMode, string> = {
+                    photo: "Photo",
+                    line: "Outline",
+                    both: "Compare",
+                  };
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setViewMode(mode)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] transition ${
+                        viewMode === mode
+                          ? "border-[var(--accent-strong)] bg-[var(--accent-strong)] text-stone-50"
+                          : "border-[var(--line)] bg-white/72 text-[var(--muted)] hover:border-[var(--accent)] hover:bg-white"
+                      }`}
+                    >
+                      {labels[mode]}
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
 
@@ -172,16 +203,53 @@ export function SnakeMatchApp() {
               </div>
 
               <div className="flex flex-col gap-4">
-                <div className="rounded-[1.5rem] border border-[var(--line)] bg-white/64 p-5">
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">
-                    How it works
-                  </p>
-                  <ol className="mt-3 space-y-3 text-sm leading-6 text-[var(--muted)]">
-                    <li>1. Draw one uninterrupted line in the canvas.</li>
-                    <li>2. Press match to compare it against extracted photo-line paths first.</li>
-                    <li>3. Use the canvas toggle to compare your line with the matched full photo.</li>
-                  </ol>
-                </div>
+                {result ? (
+                  <div className="rounded-[1.5rem] border border-[var(--line)] bg-white/64 p-5">
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">
+                      Shape comparison
+                    </p>
+                    <svg viewBox="-0.6 -0.6 1.2 1.2" className="mt-3 h-20 w-full">
+                      <path
+                        d={normalizedUserPath}
+                        fill="none"
+                        stroke="#30452d"
+                        strokeWidth="0.04"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <path
+                        d={snakeCenterlinePath}
+                        fill="none"
+                        stroke="#d38b4d"
+                        strokeWidth="0.04"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        opacity="0.85"
+                      />
+                    </svg>
+                    <div className="mt-2.5 flex gap-5">
+                      <span className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
+                        <span className="inline-block h-2 w-2 rounded-full bg-[#30452d]" />
+                        Your line
+                      </span>
+                      <span className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
+                        <span className="inline-block h-2 w-2 rounded-full bg-[#d38b4d]" />
+                        Snake&apos;s body line
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-[1.5rem] border border-[var(--line)] bg-white/64 p-5">
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">
+                      How it works
+                    </p>
+                    <ol className="mt-3 space-y-3 text-sm leading-6 text-[var(--muted)]">
+                      <li>1. Draw one uninterrupted line in the canvas.</li>
+                      <li>2. Press match to compare it against extracted photo-line paths first.</li>
+                      <li>3. Use the canvas toggle to compare your line with the matched full photo.</li>
+                    </ol>
+                  </div>
+                )}
 
                 <div className="rounded-[1.5rem] border border-[var(--line)] bg-white/68 p-5">
                   <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[var(--accent)]">

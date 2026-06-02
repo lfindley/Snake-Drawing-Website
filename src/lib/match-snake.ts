@@ -52,25 +52,34 @@ function toStrokePoints(points: NormalizedPathPoint[]): StrokePoint[] {
   }));
 }
 
+function rotateStrokePoints(pts: StrokePoint[], cos: number, sin: number): StrokePoint[] {
+  return pts.map((p) => ({ ...p, x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos }));
+}
+
 function compareNormalizedPaths(a: StrokePoint[], b: StrokePoint[]) {
   const sampleCount = Math.min(a.length, b.length);
   if (sampleCount < 2) {
     return 1;
   }
 
-  let forward = 0;
-  let reverse = 0;
-
-  for (let index = 0; index < sampleCount; index += 1) {
-    const pointA = a[index];
-    const pointForward = b[index];
-    const pointReverse = b[sampleCount - 1 - index];
-
-    forward += Math.hypot(pointA.x - pointForward.x, pointA.y - pointForward.y);
-    reverse += Math.hypot(pointA.x - pointReverse.x, pointA.y - pointReverse.y);
+  function pathDist(bPts: StrokePoint[]): number {
+    let forward = 0;
+    let reverse = 0;
+    for (let index = 0; index < sampleCount; index += 1) {
+      const pointA = a[index];
+      forward += Math.hypot(pointA.x - bPts[index].x, pointA.y - bPts[index].y);
+      reverse += Math.hypot(pointA.x - bPts[sampleCount - 1 - index].x, pointA.y - bPts[sampleCount - 1 - index].y);
+    }
+    return Math.min(forward, reverse) / sampleCount;
   }
 
-  return Math.min(forward, reverse) / sampleCount;
+  // Try 4 orientations (0°, 90°, 180°, 270°) to be robust to rotational ambiguity in normalization
+  return Math.min(
+    pathDist(b),
+    pathDist(rotateStrokePoints(b, 0, 1)),
+    pathDist(rotateStrokePoints(b, -1, 0)),
+    pathDist(rotateStrokePoints(b, 0, -1)),
+  );
 }
 
 function lineFeatureDistance(strokeFeatures: StrokeFeatures, photoFeatures: PhotoLineFeatures) {
@@ -223,16 +232,9 @@ function rankPhotoCandidates(points: StrokePoint[], photoRecords: PhotoShapeReco
   const strokeLineFeatures = extractStrokeFeatures(strokePath);
   const strokeSilhouetteFeatures = extractStrokeSilhouetteFeatures(points);
 
-  const bestBySpecies = new Map<
+  const bySpecies = new Map<
     string,
-    {
-      snake: MatchResult["snake"];
-      photo: PhotoShapeRecord;
-      distance: number;
-      linePathDistance: number;
-      silhouetteDistance: number;
-      breakdown: FeatureBreakdown[];
-    }
+    Array<{ snake: MatchResult["snake"]; photo: PhotoShapeRecord; scored: MatchScore }>
   >();
 
   photoRecords.forEach((photo) => {
@@ -249,30 +251,31 @@ function rankPhotoCandidates(points: StrokePoint[], photoRecords: PhotoShapeReco
       photo,
     });
 
-    const existing = bestBySpecies.get(photo.snakeId);
-    const shouldReplace =
-      !existing ||
-      scored.distance < existing.distance - 1e-6 ||
-      (Math.abs(scored.distance - existing.distance) <= 1e-6 &&
-        (scored.linePathDistance < existing.linePathDistance - 1e-6 ||
-          (Math.abs(scored.linePathDistance - existing.linePathDistance) <= 1e-6 &&
-            (scored.silhouetteDistance < existing.silhouetteDistance - 1e-6 ||
-              (Math.abs(scored.silhouetteDistance - existing.silhouetteDistance) <= 1e-6 &&
-                photo.qualityScore > existing.photo.qualityScore)))));
-
-    if (shouldReplace) {
-      bestBySpecies.set(photo.snakeId, {
-        snake,
-        photo,
-        distance: scored.distance,
-        linePathDistance: scored.linePathDistance,
-        silhouetteDistance: scored.silhouetteDistance,
-        breakdown: scored.breakdown,
-      });
-    }
+    const group = bySpecies.get(photo.snakeId) ?? [];
+    group.push({ snake, photo, scored });
+    bySpecies.set(photo.snakeId, group);
   });
 
-  return Array.from(bestBySpecies.values()).sort((a, b) => {
+  // Aggregate top-3 per species to reduce noise from individual outlier photos
+  const aggregated = Array.from(bySpecies.values()).map((group) => {
+    const sorted = group.slice().sort((a, b) => a.scored.distance - b.scored.distance);
+    const best = sorted[0];
+    const distance =
+      sorted[0].scored.distance * 0.5 +
+      (sorted[1]?.scored.distance ?? sorted[0].scored.distance) * 0.3 +
+      (sorted[2]?.scored.distance ?? sorted[0].scored.distance) * 0.2;
+
+    return {
+      snake: best.snake,
+      photo: best.photo,
+      distance,
+      linePathDistance: best.scored.linePathDistance,
+      silhouetteDistance: best.scored.silhouetteDistance,
+      breakdown: best.scored.breakdown,
+    };
+  });
+
+  return aggregated.sort((a, b) => {
     if (Math.abs(a.distance - b.distance) > 1e-6) {
       return a.distance - b.distance;
     }

@@ -18,7 +18,15 @@ type FadeMatchViewProps = {
   viewMode: OverlayViewMode;
 };
 
-function overlayBounds(points: StrokePoint[], canvasWidth: number, canvasHeight: number) {
+type BoundsData = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  css: { left: string; top: string; width: string; height: string };
+};
+
+function overlayBounds(points: StrokePoint[], canvasWidth: number, canvasHeight: number): BoundsData | null {
   if (points.length < 2) {
     return null;
   }
@@ -29,13 +37,39 @@ function overlayBounds(points: StrokePoint[], canvasWidth: number, canvasHeight:
   const top = clamp(box.minY - padding, 0, canvasHeight);
   const right = clamp(box.maxX + padding, 0, canvasWidth);
   const bottom = clamp(box.maxY + padding, 0, canvasHeight);
+  const width = Math.max(right - left, 48);
+  const height = Math.max(bottom - top, 48);
 
   return {
-    left: `${(left / canvasWidth) * 100}%`,
-    top: `${(top / canvasHeight) * 100}%`,
-    width: `${(Math.max(right - left, 48) / canvasWidth) * 100}%`,
-    height: `${(Math.max(bottom - top, 48) / canvasHeight) * 100}%`,
+    left,
+    top,
+    width,
+    height,
+    css: {
+      left: `${(left / canvasWidth) * 100}%`,
+      top: `${(top / canvasHeight) * 100}%`,
+      width: `${(width / canvasWidth) * 100}%`,
+      height: `${(height / canvasHeight) * 100}%`,
+    },
   };
+}
+
+function buildUserStrokePath(
+  points: StrokePoint[],
+  b: { left: number; top: number; width: number; height: number },
+): string {
+  if (points.length < 2) return "";
+  const x = (px: number) => (((px - b.left) / b.width) * 100).toFixed(1);
+  const y = (py: number) => (((py - b.top) / b.height) * 100).toFixed(1);
+  const cmds = [`M ${x(points[0].x)} ${y(points[0].y)}`];
+  for (let i = 1; i < points.length - 1; i++) {
+    const mx = (points[i].x + points[i + 1].x) / 2;
+    const my = (points[i].y + points[i + 1].y) / 2;
+    cmds.push(`Q ${x(points[i].x)} ${y(points[i].y)} ${x(mx)} ${y(my)}`);
+  }
+  const last = points[points.length - 1];
+  cmds.push(`L ${x(last.x)} ${y(last.y)}`);
+  return cmds.join(" ");
 }
 
 export function FadeMatchView({
@@ -61,9 +95,11 @@ export function FadeMatchView({
     bounds !== null &&
     result.overlay.photoAvailable &&
     (viewMode === "photo" || viewMode === "both");
-  const showOutline = result !== null && bounds !== null && viewMode === "both";
+  const showOutline = result !== null && bounds !== null && (viewMode === "both" || viewMode === "line");
+  const showStrokeOverlay = result !== null && bounds !== null && (viewMode === "photo" || viewMode === "both");
   const photoFrameStyle = result ? getPhotoAlignmentFrameStyle(result.photo.subjectBounds) : null;
   const outlinePath = result ? buildSvgPath(result.photo.silhouettePolygon, true) : "";
+  const userStrokePath = showStrokeOverlay && bounds ? buildUserStrokePath(points, bounds) : "";
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden rounded-[1.55rem]">
@@ -83,7 +119,7 @@ export function FadeMatchView({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="pointer-events-none absolute rounded-[1.4rem] border border-dashed border-[rgba(49,72,44,0.42)] bg-[rgba(255,252,244,0.16)]"
-            style={bounds}
+            style={bounds.css}
           />
         ) : null}
       </AnimatePresence>
@@ -97,7 +133,7 @@ export function FadeMatchView({
             exit={{ opacity: 0 }}
             transition={{ duration: 0.6, ease: "easeOut" }}
             className="pointer-events-none absolute overflow-hidden rounded-[1.2rem]"
-            style={bounds}
+            style={bounds.css}
           >
             {showPhoto && photoFrameStyle ? (
               <div className="absolute inset-0 overflow-hidden rounded-[1.2rem] shadow-[0_18px_40px_rgba(20,31,17,0.18)]">
@@ -127,6 +163,24 @@ export function FadeMatchView({
                   strokeWidth="1.75"
                   vectorEffect="non-scaling-stroke"
                   strokeLinejoin="round"
+                />
+              </svg>
+            ) : null}
+
+            {showStrokeOverlay && userStrokePath ? (
+              <svg
+                viewBox="0 0 100 100"
+                preserveAspectRatio="none"
+                className="absolute inset-0 z-20 h-full w-full overflow-visible"
+              >
+                <path
+                  d={userStrokePath}
+                  fill="none"
+                  stroke="rgba(49, 72, 44, 0.58)"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  vectorEffect="non-scaling-stroke"
                 />
               </svg>
             ) : null}

@@ -105,9 +105,12 @@ export function DrawingCanvas({
     context.beginPath();
     context.moveTo(points[0].x, points[0].y);
 
-    points.slice(1).forEach((point) => {
-      context.lineTo(point.x, point.y);
-    });
+    for (let i = 1; i < points.length - 1; i++) {
+      const mx = (points[i].x + points[i + 1].x) / 2;
+      const my = (points[i].y + points[i + 1].y) / 2;
+      context.quadraticCurveTo(points[i].x, points[i].y, mx, my);
+    }
+    context.lineTo(points[points.length - 1].x, points[points.length - 1].y);
 
     context.stroke();
   }, [points]);
